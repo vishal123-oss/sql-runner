@@ -1,0 +1,173 @@
+import type { DatabaseAdapter, QueryResult, QueryResultColumn } from './types'
+
+// ---------------------------------------------------------------------------
+// Local executor (sql.js — SQLite compiled to WebAssembly)
+// ---------------------------------------------------------------------------
+
+const DEFAULT_WASM_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/sql-wasm.wasm'
+
+let sqlJsPromise: Promise<any> | null = null
+let configuredWasmUrl: string = DEFAULT_WASM_CDN
+
+/**
+ * Configure the URL from which the sql.js WASM binary is loaded.
+ * Call before creating any editor with `executor: 'local'`.
+ */
+export function configureSqlJsWasm(url: string) {
+  configuredWasmUrl = url
+  sqlJsPromise = null
+}
+
+function resolveInitFn(mod: any): Function {
+  if (typeof mod === 'function') return mod
+  if (typeof mod?.default === 'function') return mod.default
+  if (typeof mod?.default?.default === 'function') return mod.default.default
+  throw new Error(
+    '@vsql/core: Failed to load sql.js — unexpected module shape. '
+    + 'Ensure sql.js is installed. Received type: ' + typeof mod,
+  )
+}
+
+function loadSqlJs(): Promise<any> {
+  if (sqlJsPromise) return sqlJsPromise
+  sqlJsPromise = import('sql.js').then((mod: any) => {
+    const initFn = resolveInitFn(mod)
+    return initFn({
+      locateFile: () => configuredWasmUrl,
+    })
+  })
+  return sqlJsPromise
+}
+
+export class LocalExecutor implements DatabaseAdapter {
+  private db: any = null
+  private initPromise: Promise<void> | null = null
+
+  constructor(wasmUrl?: string) {
+    if (wasmUrl) configureSqlJsWasm(wasmUrl)
+  }
+
+  async init(): Promise<void> {
+    if (this.db) return
+    if (this.initPromise) return this.initPromise
+
+    this.initPromise = loadSqlJs().then((SQL) => {
+      this.db = new SQL.Database()
+    })
+    return this.initPromise
+  }
+
+  async execute(sql: string): Promise<QueryResult> {
+    await this.init()
+    const start = performance.now()
+
+    try {
+      const trimmed = sql.trim()
+      const isSelect = /^\s*(SELECT|PRAGMA|EXPLAIN|WITH)\b/i.test(trimmed)
+
+      if (isSelect) {
+        const stmt = this.db.prepare(trimmed)
+        const colNames: string[] = stmt.getColumnNames()
+        const rawRows: any[][] = []
+        while (stmt.step()) {
+          rawRows.push(stmt.get())
+        }
+        stmt.free()
+
+        const elapsed = Math.round(performance.now() - start)
+        const columns: QueryResultColumn[] = colNames.map((name) => ({ name }))
+        const rows = rawRows.map((row) => {
+          const obj: Record<string, unknown> = {}
+          colNames.forEach((col, i) => { obj[col] = row[i] })
+          return obj
+        })
+
+        return { columns, rows, rowCount: rows.length, elapsed, sql }
+      }
+
+      this.db.exec(trimmed)
+      const elapsed = Math.round(performance.now() - start)
+
+      return {
+        columns: [],
+        rows: [],
+        rowCount: 0,
+        elapsed,
+        sql,
+      }
+    } catch (e: any) {
+      throw new Error(e.message || String(e))
+    }
+  }
+
+  async loadData(
+    tableName: string,
+    columns: string[],
+    rows: unknown[][],
+  ): Promise<void> {
+    await this.init()
+
+    const colDefs = columns.map((c) => `"${c}" TEXT`).join(', ')
+    this.db.run(`CREATE TABLE IF NOT EXISTS "${tableName}" (${colDefs})`)
+
+    if (rows.length === 0) return
+
+    const placeholders = columns.map(() => '?').join(', ')
+    const stmt = this.db.prepare(
+      `INSERT INTO "${tableName}" (${columns.map((c) => `"${c}"`).join(', ')}) VALUES (${placeholders})`,
+    )
+
+    for (const row of rows) {
+      stmt.run(row)
+    }
+    stmt.free()
+  }
+
+  async getSchema() {
+    await this.init()
+    const tables = await this.execute(
+      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+    )
+    if (!tables.rows.length) return {}
+
+    const schema: Record<string, string[]> = {}
+    for (const row of tables.rows) {
+      const tableName = row.name as string
+      const info = await this.execute(`PRAGMA table_info("${tableName}")`)
+      schema[tableName] = info.rows.map((c: any) => c.name as string)
+    }
+    return schema
+  }
+
+  destroy(): void {
+    if (this.db) {
+      this.db.close()
+      this.db = null
+    }
+    this.initPromise = null
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Adapter executor wrapper (for custom backends)
+// ---------------------------------------------------------------------------
+
+export class AdapterExecutor {
+  constructor(private adapter: DatabaseAdapter) {}
+
+  async execute(sql: string): Promise<QueryResult> {
+    const start = performance.now()
+    const result = await this.adapter.execute(sql)
+    result.elapsed = result.elapsed ?? Math.round(performance.now() - start)
+    result.sql = sql
+    return result
+  }
+
+  async getSchema() {
+    return this.adapter.getSchema?.() ?? {}
+  }
+
+  destroy(): void {
+    this.adapter.destroy?.()
+  }
+}

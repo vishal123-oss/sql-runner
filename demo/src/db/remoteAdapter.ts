@@ -1,0 +1,51 @@
+import type { DatabaseAdapter, QueryResult, SchemaDefinition } from '@vsql/core'
+import { API_BASE_URL, API_KEY } from './config'
+
+/**
+ * Adapter that sends SQL to your backend. Your backend holds
+ * the real database credentials and returns query results.
+ */
+export const remoteDbAdapter: DatabaseAdapter = {
+  async execute(sql: string): Promise<QueryResult> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+    if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`
+
+    const res = await fetch(`${API_BASE_URL}/api/query`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ sql }),
+    })
+
+    if (!res.ok) {
+      const text = await res.text()
+      try {
+        const json = JSON.parse(text)
+        throw new Error(json.error || text || `HTTP ${res.status}`)
+      } catch (e: unknown) {
+        if (e instanceof Error && e.name !== 'SyntaxError') throw e
+        throw new Error(text || `HTTP ${res.status}`)
+      }
+    }
+
+    const data = await res.json()
+
+    return {
+      columns: (data.columns ?? []).map((name: string) => ({ name })),
+      rows: data.rows ?? [],
+      rowCount: (data.rows ?? []).length,
+      elapsed: data.elapsed,
+      sql,
+    }
+  },
+
+  async getSchema(): Promise<SchemaDefinition> {
+    const headers: Record<string, string> = {}
+    if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`
+
+    const res = await fetch(`${API_BASE_URL}/api/schema`, { headers })
+    if (!res.ok) return {}
+    return res.json()
+  },
+}

@@ -1,0 +1,404 @@
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { useSqlEditor, SqlResults } from '@vsql/react'
+import { configureSqlJsWasm } from '@vsql/core'
+import type { SqlDialect, ThemePreset } from '@vsql/core'
+import { USE_REMOTE_DB, API_BASE_URL } from './db/config'
+import { remoteDbAdapter } from './db/remoteAdapter'
+
+if (!USE_REMOTE_DB) configureSqlJsWasm('/sql-wasm.wasm')
+
+const SAMPLE_SCHEMA = {
+  users: [
+    { name: 'id', type: 'INTEGER' },
+    { name: 'name', type: 'TEXT' },
+    { name: 'email', type: 'TEXT' },
+    { name: 'age', type: 'INTEGER' },
+    { name: 'city', type: 'TEXT' },
+  ],
+  orders: [
+    { name: 'id', type: 'INTEGER' },
+    { name: 'user_id', type: 'INTEGER' },
+    { name: 'product', type: 'TEXT' },
+    { name: 'amount', type: 'REAL' },
+    { name: 'status', type: 'TEXT' },
+  ],
+  products: [
+    { name: 'id', type: 'INTEGER' },
+    { name: 'name', type: 'TEXT' },
+    { name: 'price', type: 'REAL' },
+    { name: 'category', type: 'TEXT' },
+  ],
+}
+
+const SAMPLE_QUERIES = [
+  'SELECT * FROM users;',
+  'SELECT u.name, o.product, o.amount FROM users u JOIN orders o ON u.id = o.user_id;',
+  "SELECT city, COUNT(*) as total, AVG(age) as avg_age FROM users GROUP BY city HAVING total > 1;",
+  "SELECT * FROM products WHERE price > 20 ORDER BY price DESC;",
+]
+
+type ConnectionStatus = 'checking' | 'connected' | 'error' | null
+
+export function App() {
+  const [dialect, setDialect] = useState<SqlDialect>(USE_REMOTE_DB ? 'postgresql' : 'sqlite')
+  const [theme, setTheme] = useState<ThemePreset>('light')
+  const [statusMessage, setStatusMessage] = useState<string | null>(null)
+  const [dataLoaded, setDataLoaded] = useState(false)
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(USE_REMOTE_DB ? 'checking' : null)
+  const [connectionError, setConnectionError] = useState<string | null>(null)
+
+  const {
+    containerRef,
+    editor,
+    errors,
+    results,
+    isRunning,
+    run,
+    setSql,
+    setDialect: changeDialect,
+    setTheme: changeTheme,
+  } = useSqlEditor({
+    dialect,
+    schema: SAMPLE_SCHEMA,
+    theme,
+    executor: USE_REMOTE_DB ? remoteDbAdapter : 'local',
+    placeholder: 'Write your SQL query here... (Ctrl+Enter to run)',
+    value: 'SELECT * FROM users;',
+    minHeight: 180,
+    maxHeight: 400,
+    validateDelay: 300,
+  })
+
+  const seedDone = useRef(false)
+
+  // When using remote DB: check API health and enable Run Query
+  useEffect(() => {
+    if (!USE_REMOTE_DB) return
+    setDataLoaded(true)
+    const url = `${API_BASE_URL.replace(/\/$/, '')}/api/health`
+    fetch(url)
+      .then((res) => res.json().catch(() => ({})))
+      .then((data) => {
+        if (data?.ok) {
+          setConnectionStatus('connected')
+          setConnectionError(null)
+        } else {
+          setConnectionStatus('error')
+          setConnectionError(data?.error || 'Connection failed')
+        }
+      })
+      .catch((err) => {
+        setConnectionStatus('error')
+        setConnectionError(err?.message || 'Cannot reach server. Start it with: pnpm run server')
+      })
+  }, [])
+
+  // Load real schema from API when using remote DB and editor is ready
+  useEffect(() => {
+    if (!USE_REMOTE_DB || !editor || !remoteDbAdapter.getSchema) return
+    remoteDbAdapter
+      .getSchema()
+      .then((schema) => {
+        if (schema && typeof schema === 'object' && Object.keys(schema).length > 0) {
+          editor.setSchema(schema)
+        }
+      })
+      .catch(() => { /* keep default schema on error */ })
+  }, [editor])
+
+  useEffect(() => {
+    if (USE_REMOTE_DB || !editor || seedDone.current) return
+    seedDone.current = true
+
+    ;(async () => {
+      try {
+        await editor.execRaw(`
+          CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, age INTEGER, city TEXT);
+          CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, user_id INTEGER, product TEXT, amount REAL, status TEXT);
+          CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, name TEXT, price REAL, category TEXT);
+        `)
+        await editor.execRaw(`
+          INSERT OR IGNORE INTO users VALUES (1, 'Alice', 'alice@example.com', 30, 'New York');
+          INSERT OR IGNORE INTO users VALUES (2, 'Bob', 'bob@example.com', 25, 'San Francisco');
+          INSERT OR IGNORE INTO users VALUES (3, 'Charlie', 'charlie@example.com', 35, 'New York');
+          INSERT OR IGNORE INTO users VALUES (4, 'Diana', 'diana@example.com', 28, 'Chicago');
+          INSERT OR IGNORE INTO users VALUES (5, 'Eve', 'eve@example.com', 32, 'San Francisco');
+        `)
+        await editor.execRaw(`
+          INSERT OR IGNORE INTO orders VALUES (1, 1, 'Laptop', 999.99, 'completed');
+          INSERT OR IGNORE INTO orders VALUES (2, 2, 'Phone', 699.99, 'completed');
+          INSERT OR IGNORE INTO orders VALUES (3, 1, 'Tablet', 449.99, 'pending');
+          INSERT OR IGNORE INTO orders VALUES (4, 3, 'Monitor', 349.99, 'completed');
+          INSERT OR IGNORE INTO orders VALUES (5, 4, 'Keyboard', 79.99, 'shipped');
+          INSERT OR IGNORE INTO orders VALUES (6, 2, 'Mouse', 29.99, 'completed');
+        `)
+        await editor.execRaw(`
+          INSERT OR IGNORE INTO products VALUES (1, 'Laptop', 999.99, 'Electronics');
+          INSERT OR IGNORE INTO products VALUES (2, 'Phone', 699.99, 'Electronics');
+          INSERT OR IGNORE INTO products VALUES (3, 'Tablet', 449.99, 'Electronics');
+          INSERT OR IGNORE INTO products VALUES (4, 'Keyboard', 79.99, 'Accessories');
+          INSERT OR IGNORE INTO products VALUES (5, 'Mouse', 29.99, 'Accessories');
+          INSERT OR IGNORE INTO products VALUES (6, 'Headphones', 149.99, 'Audio');
+        `)
+        setDataLoaded(true)
+        setStatusMessage('Sample data loaded. Click Run Query!')
+        setTimeout(() => setStatusMessage(null), 3000)
+      } catch (e: any) {
+        setStatusMessage('Error loading data: ' + e.message)
+      }
+    })()
+  }, [editor])
+
+  const handleRun = useCallback(async () => {
+    setStatusMessage(null)
+    try {
+      const result = await run()
+      if (!result) {
+        setStatusMessage('Query returned no data.')
+      }
+    } catch (e: any) {
+      setStatusMessage('Execution error: ' + (e?.message || String(e)))
+    }
+  }, [run])
+
+  const handleDialectChange = (d: SqlDialect) => {
+    setDialect(d)
+    changeDialect(d)
+  }
+
+  const handleThemeChange = (t: ThemePreset) => {
+    setTheme(t)
+    changeTheme(t)
+  }
+
+  const isDark = theme === 'dark'
+
+  return (
+    <div style={{
+      minHeight: '100vh',
+      backgroundColor: isDark ? '#0f1117' : '#f8f9fb',
+      color: isDark ? '#e4e5e7' : '#1e1e1e',
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+      transition: 'background-color 0.2s, color 0.2s',
+    }}>
+      <div style={{ maxWidth: 960, margin: '0 auto', padding: '32px 24px' }}>
+        {/* Header */}
+        <div style={{ marginBottom: 32 }}>
+          <h1 style={{
+            fontSize: 28, fontWeight: 700, margin: '0 0 4px 0', letterSpacing: '-0.5px',
+          }}>
+            <span style={{ color: isDark ? '#60a5fa' : '#2563eb' }}>@vsql</span> SQL Runner
+          </h1>
+          <p style={{ margin: 0, fontSize: 14, color: isDark ? '#6b7280' : '#9ca3af' }}>
+            Write, validate, and run SQL queries in the browser
+          </p>
+        </div>
+
+        {/* Toolbar */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          <select
+            value={dialect}
+            onChange={(e) => handleDialectChange(e.target.value as SqlDialect)}
+            style={selectStyle(isDark)}
+          >
+            <option value="sqlite">SQLite</option>
+            <option value="mysql">MySQL</option>
+            <option value="postgresql">PostgreSQL</option>
+            <option value="mssql">MSSQL</option>
+            <option value="mariadb">MariaDB</option>
+            <option value="standard">Standard SQL</option>
+          </select>
+
+          <button onClick={() => handleThemeChange(isDark ? 'light' : 'dark')} style={btnStyle(isDark, false)}>
+            {isDark ? 'Light Mode' : 'Dark Mode'}
+          </button>
+
+          <div style={{ flex: 1 }} />
+
+          {USE_REMOTE_DB && connectionStatus === 'checking' && (
+            <span style={{ fontSize: 12, color: isDark ? '#6b7280' : '#9ca3af' }}>
+              Connecting...
+            </span>
+          )}
+          {USE_REMOTE_DB && connectionStatus === 'connected' && (
+            <span style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, color: isDark ? '#34d399' : '#059669' }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: 'currentColor' }} />
+              Connected to database
+            </span>
+          )}
+          {USE_REMOTE_DB && connectionStatus === 'error' && (
+            <span style={{ fontSize: 12, color: isDark ? '#f87171' : '#dc2626' }} title={connectionError || ''}>
+              Offline — {connectionError || 'Cannot reach server'}
+            </span>
+          )}
+
+          {!dataLoaded && !USE_REMOTE_DB && (
+            <span style={{ fontSize: 12, color: isDark ? '#6b7280' : '#9ca3af' }}>
+              Loading database...
+            </span>
+          )}
+
+          <button
+            onClick={handleRun}
+            disabled={isRunning || !dataLoaded}
+            style={{
+              ...btnStyle(isDark, true),
+              opacity: (isRunning || !dataLoaded) ? 0.6 : 1,
+              minWidth: 120,
+            }}
+          >
+            {isRunning ? 'Running...' : 'Run Query'}
+          </button>
+        </div>
+
+        {/* Editor */}
+        <div
+          ref={containerRef}
+          style={{
+            borderRadius: 10,
+            overflow: 'hidden',
+            border: `1px solid ${isDark ? '#1f2937' : '#e5e7eb'}`,
+            boxShadow: isDark ? '0 4px 24px rgba(0,0,0,.4)' : '0 4px 24px rgba(0,0,0,.06)',
+          }}
+        />
+
+        {/* Sample queries */}
+        <div style={{ marginTop: 12, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: isDark ? '#6b7280' : '#9ca3af', lineHeight: '28px' }}>Try:</span>
+          {SAMPLE_QUERIES.map((q, i) => (
+            <button
+              key={i}
+              onClick={() => setSql(q)}
+              style={{
+                fontSize: 11, padding: '4px 10px', borderRadius: 6,
+                border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                backgroundColor: isDark ? '#1f2937' : '#fff',
+                color: isDark ? '#d1d5db' : '#4b5563',
+                cursor: 'pointer', whiteSpace: 'nowrap',
+                overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220,
+              }}
+              title={q}
+            >
+              {q.length > 40 ? q.slice(0, 40) + '...' : q}
+            </button>
+          ))}
+        </div>
+
+        {/* Status / errors */}
+        {statusMessage && (
+          <div style={{
+            marginTop: 12, padding: '8px 14px', borderRadius: 8, fontSize: 13,
+            backgroundColor: isDark ? '#1e3a5f' : '#eff6ff',
+            color: isDark ? '#60a5fa' : '#2563eb',
+            border: `1px solid ${isDark ? '#1e3a5f' : '#bfdbfe'}`,
+          }}>
+            {statusMessage}
+          </div>
+        )}
+
+        {errors.length > 0 && (
+          <div style={{
+            marginTop: 12, padding: '10px 14px', borderRadius: 8,
+            backgroundColor: isDark ? '#1c1017' : '#fef2f2',
+            border: `1px solid ${isDark ? '#7f1d1d' : '#fecaca'}`,
+          }}>
+            {errors.map((e, i) => (
+              <p key={i} style={{
+                margin: i > 0 ? '4px 0 0' : 0, fontSize: 13,
+                color: isDark ? '#f87171' : '#dc2626',
+              }}>
+                <strong>Line {e.line + 1}:</strong> {e.message}
+              </p>
+            ))}
+          </div>
+        )}
+
+        {/* Results */}
+        <div style={{
+          marginTop: 16, borderRadius: 10, overflow: 'hidden',
+          border: `1px solid ${isDark ? '#1f2937' : '#e5e7eb'}`,
+          backgroundColor: isDark ? '#111318' : '#fff',
+          boxShadow: isDark ? '0 2px 12px rgba(0,0,0,.3)' : '0 2px 12px rgba(0,0,0,.04)',
+        }}>
+          <SqlResults
+            data={results}
+            maxHeight={350}
+            showRowCount
+            showElapsed
+            emptyMessage="Click 'Run Query' to see results"
+            style={{
+              ...(isDark ? {
+                '--vsql-border': '#1f2937', '--vsql-muted': '#6b7280',
+                '--vsql-badge-bg': '#1e3a5f', '--vsql-badge-fg': '#60a5fa',
+                '--vsql-th-bg': '#151921', '--vsql-th-fg': '#9ca3af',
+                '--vsql-row-alt': '#0d0f14',
+              } as any : {}),
+            }}
+          />
+        </div>
+
+        {/* Schema info */}
+        <div style={{
+          marginTop: 24, padding: 16, borderRadius: 10,
+          border: `1px solid ${isDark ? '#1f2937' : '#e5e7eb'}`,
+          backgroundColor: isDark ? '#111318' : '#fff',
+        }}>
+          <h3 style={{
+            margin: '0 0 12px', fontSize: 14, fontWeight: 600,
+            color: isDark ? '#9ca3af' : '#6b7280',
+            textTransform: 'uppercase', letterSpacing: '0.5px',
+          }}>
+            Database Schema
+          </h3>
+          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+            {Object.entries(SAMPLE_SCHEMA).map(([table, cols]) => (
+              <div key={table}>
+                <h4 style={{ margin: '0 0 6px', fontSize: 14, fontWeight: 600, color: isDark ? '#60a5fa' : '#2563eb' }}>
+                  {table}
+                </h4>
+                <div style={{ fontSize: 13 }}>
+                  {cols.map((c, i) => (
+                    <div key={i} style={{ padding: '2px 0', color: isDark ? '#d1d5db' : '#4b5563' }}>
+                      <span style={{ fontFamily: 'monospace' }}>{c.name}</span>
+                      <span style={{ marginLeft: 6, fontSize: 11, color: isDark ? '#6b7280' : '#9ca3af' }}>{c.type}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <p style={{ marginTop: 32, textAlign: 'center', fontSize: 12, color: isDark ? '#4b5563' : '#9ca3af' }}>
+          @vsql/core + @vsql/react | CodeMirror 6 + sql.js + node-sql-parser
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function selectStyle(isDark: boolean): React.CSSProperties {
+  return {
+    fontSize: 13, padding: '6px 12px', borderRadius: 8,
+    border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+    backgroundColor: isDark ? '#1f2937' : '#fff',
+    color: isDark ? '#e4e5e7' : '#1e1e1e',
+    cursor: 'pointer', outline: 'none',
+  }
+}
+
+function btnStyle(isDark: boolean, primary: boolean): React.CSSProperties {
+  if (primary) {
+    return {
+      fontSize: 13, fontWeight: 600, padding: '8px 18px', borderRadius: 8,
+      border: 'none', backgroundColor: '#2563eb', color: '#fff', cursor: 'pointer',
+    }
+  }
+  return {
+    fontSize: 13, padding: '6px 14px', borderRadius: 8,
+    border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+    backgroundColor: isDark ? '#1f2937' : '#fff',
+    color: isDark ? '#d1d5db' : '#4b5563',
+    cursor: 'pointer',
+  }
+}
