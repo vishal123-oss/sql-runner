@@ -117,29 +117,45 @@ export function App() {
           CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, user_id INTEGER, product TEXT, amount REAL, status TEXT);
           CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, name TEXT, price REAL, category TEXT);
         `)
-        await editor.execRaw(`
-          INSERT OR IGNORE INTO users VALUES (1, 'Alice', 'alice@example.com', 30, 'New York');
-          INSERT OR IGNORE INTO users VALUES (2, 'Bob', 'bob@example.com', 25, 'San Francisco');
-          INSERT OR IGNORE INTO users VALUES (3, 'Charlie', 'charlie@example.com', 35, 'New York');
-          INSERT OR IGNORE INTO users VALUES (4, 'Diana', 'diana@example.com', 28, 'Chicago');
-          INSERT OR IGNORE INTO users VALUES (5, 'Eve', 'eve@example.com', 32, 'San Francisco');
-        `)
-        await editor.execRaw(`
-          INSERT OR IGNORE INTO orders VALUES (1, 1, 'Laptop', 999.99, 'completed');
-          INSERT OR IGNORE INTO orders VALUES (2, 2, 'Phone', 699.99, 'completed');
-          INSERT OR IGNORE INTO orders VALUES (3, 1, 'Tablet', 449.99, 'pending');
-          INSERT OR IGNORE INTO orders VALUES (4, 3, 'Monitor', 349.99, 'completed');
-          INSERT OR IGNORE INTO orders VALUES (5, 4, 'Keyboard', 79.99, 'shipped');
-          INSERT OR IGNORE INTO orders VALUES (6, 2, 'Mouse', 29.99, 'completed');
-        `)
-        await editor.execRaw(`
-          INSERT OR IGNORE INTO products VALUES (1, 'Laptop', 999.99, 'Electronics');
-          INSERT OR IGNORE INTO products VALUES (2, 'Phone', 699.99, 'Electronics');
-          INSERT OR IGNORE INTO products VALUES (3, 'Tablet', 449.99, 'Electronics');
-          INSERT OR IGNORE INTO products VALUES (4, 'Keyboard', 79.99, 'Accessories');
-          INSERT OR IGNORE INTO products VALUES (5, 'Mouse', 29.99, 'Accessories');
-          INSERT OR IGNORE INTO products VALUES (6, 'Headphones', 149.99, 'Audio');
-        `)
+        // Generate 100 users
+        const firstNames = ['Alice', 'Bob', 'Charlie', 'Diana', 'Eve', 'Frank', 'Grace', 'Henry', 'Ivy', 'Jack', 'Kate', 'Liam', 'Mia', 'Noah', 'Olivia', 'Peter', 'Quinn', 'Ruby', 'Sam', 'Tina', 'Uma', 'Victor', 'Wendy', 'Xavier', 'Yara', 'Zack']
+        const cities = ['New York', 'San Francisco', 'Chicago', 'Los Angeles', 'Houston', 'Phoenix', 'Seattle', 'Denver', 'Boston', 'Miami']
+        const domains = ['gmail.com', 'yahoo.com', 'outlook.com', 'example.com', 'mail.com']
+
+        let usersInsert = ''
+        for (let i = 1; i <= 100; i++) {
+          const name = firstNames[i % firstNames.length] + (i > 26 ? i : '')
+          const email = `user${i}@${domains[i % domains.length]}`
+          const age = 20 + (i % 50)
+          const city = cities[i % cities.length]
+          usersInsert += `INSERT OR IGNORE INTO users VALUES (${i}, '${name}', '${email}', ${age}, '${city}');\n`
+        }
+        await editor.execRaw(usersInsert)
+        // Generate 100 orders
+        const products = ['Laptop', 'Phone', 'Tablet', 'Monitor', 'Keyboard', 'Mouse', 'Headphones', 'Webcam', 'Speaker', 'Charger', 'Cable', 'Case', 'Stand', 'Dock', 'Printer']
+        const statuses = ['completed', 'pending', 'shipped', 'cancelled', 'processing']
+
+        let ordersInsert = ''
+        for (let i = 1; i <= 100; i++) {
+          const userId = (i % 100) + 1
+          const product = products[i % products.length]
+          const amount = (19.99 + (i * 7.5)).toFixed(2)
+          const status = statuses[i % statuses.length]
+          ordersInsert += `INSERT OR IGNORE INTO orders VALUES (${i}, ${userId}, '${product}', ${amount}, '${status}');\n`
+        }
+        await editor.execRaw(ordersInsert)
+        // Generate 100 products
+        const productNames = ['Laptop', 'Phone', 'Tablet', 'Monitor', 'Keyboard', 'Mouse', 'Headphones', 'Webcam', 'Speaker', 'Charger', 'Cable', 'Case', 'Stand', 'Dock', 'Printer', 'Scanner', 'Router', 'SSD', 'RAM', 'GPU']
+        const categories = ['Electronics', 'Accessories', 'Audio', 'Storage', 'Networking', 'Peripherals']
+
+        let productsInsert = ''
+        for (let i = 1; i <= 100; i++) {
+          const name = productNames[i % productNames.length] + (i > 20 ? ` Pro ${Math.floor(i / 20)}` : '')
+          const price = (29.99 + (i * 4.99)).toFixed(2)
+          const category = categories[i % categories.length]
+          productsInsert += `INSERT OR IGNORE INTO products VALUES (${i}, '${name}', ${price}, '${category}');\n`
+        }
+        await editor.execRaw(productsInsert)
         setDataLoaded(true)
         setStatusMessage('Sample data loaded. Click Run Query!')
         setTimeout(() => setStatusMessage(null), 3000)
@@ -170,6 +186,24 @@ export function App() {
     setTheme(t)
     changeTheme(t)
   }
+
+  const handleExport = useCallback(() => {
+    if (!results) {
+      setStatusMessage('No results to export. Run a query first.')
+      setTimeout(() => setStatusMessage(null), 3000)
+      return
+    }
+
+    const success = exportToCSV(results)
+    if (success) {
+      const rowCount = results.rows?.length || 0
+      setStatusMessage(`Successfully exported ${rowCount} rows to CSV!`)
+      setTimeout(() => setStatusMessage(null), 3000)
+    } else {
+      setStatusMessage('Failed to export. No data available.')
+      setTimeout(() => setStatusMessage(null), 3000)
+    }
+  }, [results])
 
   const isDark = theme === 'dark'
 
@@ -248,6 +282,20 @@ export function App() {
             }}
           >
             {isRunning ? 'Running...' : 'Run Query'}
+          </button>
+
+          <button
+            onClick={handleExport}
+            disabled={!results || !results.rows || results.rows.length === 0}
+            style={{
+              ...btnStyle(isDark, false),
+              opacity: (!results || !results.rows || results.rows.length === 0) ? 0.6 : 1,
+              backgroundColor: isDark ? '#1e3a5f' : '#eff6ff',
+              color: isDark ? '#60a5fa' : '#2563eb',
+              border: `1px solid ${isDark ? '#1e3a5f' : '#bfdbfe'}`,
+            }}
+          >
+            Export CSV
           </button>
         </div>
 
@@ -401,4 +449,40 @@ function btnStyle(isDark: boolean, primary: boolean): React.CSSProperties {
     color: isDark ? '#d1d5db' : '#4b5563',
     cursor: 'pointer',
   }
+}
+
+// Helper function to export query results to CSV
+function exportToCSV(results: any): boolean {
+  if (!results || !results.columns || !results.rows) {
+    return false
+  }
+
+  const headers = results.columns.map((col: any) => col.name || col)
+  const csvRows: string[] = []
+
+  // Add header row
+  csvRows.push(headers.map(h => `"${String(h).replace(/"/g, '""')}"`).join(','))
+
+  // Add data rows
+  for (const row of results.rows) {
+    const values = row.map((val: any) => {
+      if (val === null || val === undefined) return ''
+      const str = String(val)
+      return `"${str.replace(/"/g, '""')}"`
+    })
+    csvRows.push(values.join(','))
+  }
+
+  const csvContent = csvRows.join('\n')
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `query-results-${new Date().toISOString().slice(0, 10)}.csv`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+
+  return true
 }
