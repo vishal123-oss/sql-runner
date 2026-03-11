@@ -6,6 +6,9 @@ export type { SqlEditorProps, SqlEditorRef } from './SqlEditor'
 export { SqlResults } from './SqlResults'
 export type { SqlResultsProps } from './SqlResults'
 
+export { SqlChart } from './SqlChart'
+export type { SqlChartProps } from './SqlChart'
+
 export { useSqlEditor } from './useSqlEditor'
 export type { UseSqlEditorOptions, UseSqlEditorReturn } from './useSqlEditor'
 
@@ -30,4 +33,8 @@ export type {
   ExportOptions,
   ExportResult,
   ExportFormat,
+  ChartType,
+  ChartColumnConfig,
+  ChartColors,
+  ChartOptions,
 } from '@vsql/core'

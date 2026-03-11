@@ -253,3 +253,62 @@ export interface ExportResult {
   /** Error message if export failed */
   error?: string
 }
+
+// ---------------------------------------------------------------------------
+// Chart / Visualization
+// ---------------------------------------------------------------------------
+
+/** Supported chart types */
+export type ChartType = 'bar' | 'horizontal-bar' | 'grouped-bar' | 'stacked-bar'
+
+/** Chart column configuration */
+export interface ChartColumnConfig {
+  /** Column name to use for labels (x-axis) */
+  labelColumn: string
+  /** Column name(s) to use for values (y-axis) */
+  valueColumns: string[]
+  /** Optional: Column to use for grouping (for grouped/stacked bars) */
+  groupColumn?: string
+}
+
+/** Chart color configuration */
+export interface ChartColors {
+  /** Primary colors for bars (array for multiple series) */
+  bars?: string[]
+  /** Background color */
+  background?: string
+  /** Text color */
+  text?: string
+  /** Grid line color */
+  grid?: string
+  /** Axis color */
+  axis?: string
+}
+
+/** Chart display options */
+export interface ChartOptions {
+  /** Chart title */
+  title?: string
+  /** Show legend (for multi-series charts) */
+  showLegend?: boolean
+  /** Show grid lines */
+  showGrid?: boolean
+  /** Show values on bars */
+  showValues?: boolean
+  /** Custom colors */
+  colors?: ChartColors
+  /** Chart height in pixels */
+  height?: number
+  /** Bar width (as fraction, 0-1) */
+  barWidth?: number
+  /** Animation duration in ms (0 for no animation) */
+  animationDuration?: number
+  /** X-axis label */
+  xAxisLabel?: string
+  /** Y-axis label */
+  yAxisLabel?: string
+  /** Format function for values */
+  valueFormatter?: (value: number) => string
+  /** Format function for labels */
+  labelFormatter?: (label: string) => string
+}

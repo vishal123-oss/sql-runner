@@ -25,5 +25,9 @@ export type {
   ExportOptions,
   ExportResult,
   ExportFormat,
+  ChartType,
+  ChartColumnConfig,
+  ChartColors,
+  ChartOptions,
 } from './types'
 export type { RemoteExecutorConfig } from './remoteAdapter'

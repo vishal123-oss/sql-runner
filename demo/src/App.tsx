@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { useSqlEditor, SqlResults } from '@vsql/react'
+import { useSqlEditor, SqlResults, SqlChart } from '@vsql/react'
 import { configureSqlJsWasm } from '@vsql/core'
-import type { SqlDialect, ThemePreset, ExportResult } from '@vsql/core'
+import type { SqlDialect, ThemePreset, ExportResult, ChartType } from '@vsql/core'
 import { USE_REMOTE_DB, API_BASE_URL } from './db/config'
 import { remoteDbAdapter } from './db/remoteAdapter'
 
@@ -37,6 +37,34 @@ const SAMPLE_QUERIES = [
   "SELECT * FROM products WHERE price > 20 ORDER BY price DESC;",
 ]
 
+// Chart-specific queries for visualization demos
+const CHART_QUERIES = [
+  {
+    name: 'Users by City',
+    query: "SELECT city, COUNT(*) as count FROM users GROUP BY city ORDER BY count DESC LIMIT 8;",
+    chartType: 'bar' as ChartType,
+    columns: { labelColumn: 'city', valueColumns: ['count'] },
+  },
+  {
+    name: 'Order Status',
+    query: "SELECT status, COUNT(*) as count FROM orders GROUP BY status ORDER BY count DESC;",
+    chartType: 'horizontal-bar' as ChartType,
+    columns: { labelColumn: 'status', valueColumns: ['count'] },
+  },
+  {
+    name: 'Sales by Category',
+    query: "SELECT category, SUM(price) as total_sales FROM products GROUP BY category ORDER BY total_sales DESC;",
+    chartType: 'bar' as ChartType,
+    columns: { labelColumn: 'category', valueColumns: ['total_sales'] },
+  },
+  {
+    name: 'Product Categories',
+    query: "SELECT category, COUNT(*) as products, AVG(price) as avg_price FROM products GROUP BY category;",
+    chartType: 'grouped-bar' as ChartType,
+    columns: { labelColumn: 'category', valueColumns: ['products', 'avg_price'] },
+  },
+]
+
 type ConnectionStatus = 'checking' | 'connected' | 'error' | null
 
 export function App() {
@@ -46,6 +74,7 @@ export function App() {
   const [dataLoaded, setDataLoaded] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(USE_REMOTE_DB ? 'checking' : null)
   const [connectionError, setConnectionError] = useState<string | null>(null)
+  const [chartResults, setChartResults] = useState<Record<string, any>>({})
 
   const {
     containerRef,
@@ -159,11 +188,30 @@ export function App() {
         setDataLoaded(true)
         setStatusMessage('Sample data loaded. Click Run Query!')
         setTimeout(() => setStatusMessage(null), 3000)
+
+        // Run chart queries after data is loaded
+        loadChartData()
       } catch (e: any) {
         setStatusMessage('Error loading data: ' + e.message)
       }
     })()
   }, [editor])
+
+  // Function to load chart data
+  const loadChartData = async () => {
+    if (!editor) return
+
+    const results: Record<string, any> = {}
+    for (const chartQuery of CHART_QUERIES) {
+      try {
+        const result = await editor.execRaw(chartQuery.query)
+        results[chartQuery.name] = result
+      } catch (e) {
+        console.error(`Error loading chart data for ${chartQuery.name}:`, e)
+      }
+    }
+    setChartResults(results)
+  }
 
   const handleRun = useCallback(async () => {
     setStatusMessage(null)
@@ -367,6 +415,59 @@ export function App() {
             }}
           />
         </div>
+
+        {/* Visualizations */}
+        {Object.keys(chartResults).length > 0 && (
+          <div style={{ marginTop: 24 }}>
+            <h3 style={{
+              margin: '0 0 16px', fontSize: 14, fontWeight: 600,
+              color: isDark ? '#9ca3af' : '#6b7280',
+              textTransform: 'uppercase', letterSpacing: '0.5px',
+            }}>
+              Data Visualizations
+            </h3>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))',
+              gap: 16,
+            }}>
+              {CHART_QUERIES.map((chartQuery) => {
+                const chartData = chartResults[chartQuery.name]
+                if (!chartData || !chartData.rows || chartData.rows.length === 0) return null
+
+                return (
+                  <div
+                    key={chartQuery.name}
+                    style={{
+                      borderRadius: 10,
+                      border: `1px solid ${isDark ? '#1f2937' : '#e5e7eb'}`,
+                      backgroundColor: isDark ? '#111318' : '#fff',
+                      boxShadow: isDark ? '0 2px 12px rgba(0,0,0,.3)' : '0 2px 12px rgba(0,0,0,.04)',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <SqlChart
+                      data={chartData}
+                      type={chartQuery.chartType}
+                      columns={chartQuery.columns}
+                      options={{
+                        title: chartQuery.name,
+                        showValues: true,
+                        showGrid: true,
+                        height: 280,
+                        colors: isDark ? {
+                          text: '#d1d5db',
+                          grid: '#374151',
+                          axis: '#6b7280',
+                        } : undefined,
+                      }}
+                    />
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Schema info */}
         <div style={{
