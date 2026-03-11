@@ -259,11 +259,11 @@ export interface ExportResult {
 // ---------------------------------------------------------------------------
 
 /** Supported chart types */
-export type ChartType = 'bar' | 'horizontal-bar' | 'grouped-bar' | 'stacked-bar'
+export type ChartType = 'bar' | 'horizontal-bar' | 'grouped-bar' | 'stacked-bar' | 'pie' | 'donut'
 
 /** Chart column configuration */
 export interface ChartColumnConfig {
-  /** Column name to use for labels (x-axis) */
+  /** Column name to use for labels (x-axis or pie segments) */
   labelColumn: string
   /** Column name(s) to use for values (y-axis) */
   valueColumns: string[]
@@ -273,7 +273,7 @@ export interface ChartColumnConfig {
 
 /** Chart color configuration */
 export interface ChartColors {
-  /** Primary colors for bars (array for multiple series) */
+  /** Primary colors for bars/pie slices (array for multiple series) */
   bars?: string[]
   /** Background color */
   background?: string
@@ -293,7 +293,7 @@ export interface ChartOptions {
   showLegend?: boolean
   /** Show grid lines */
   showGrid?: boolean
-  /** Show values on bars */
+  /** Show values on bars/slices */
   showValues?: boolean
   /** Custom colors */
   colors?: ChartColors
@@ -311,4 +311,8 @@ export interface ChartOptions {
   valueFormatter?: (value: number) => string
   /** Format function for labels */
   labelFormatter?: (label: string) => string
+  /** Show percentage on pie/donut charts */
+  showPercentage?: boolean
+  /** Donut hole size (0-1, only for donut chart) */
+  donutHole?: number
 }

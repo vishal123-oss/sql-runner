@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useSqlEditor, SqlResults, SqlChart } from '@vsql/react'
 import { configureSqlJsWasm } from '@vsql/core'
-import type { SqlDialect, ThemePreset, ExportResult, ChartType } from '@vsql/core'
+import type { SqlDialect, ThemePreset, ExportResult, ChartType, ChartColumnConfig } from '@vsql/core'
 import { USE_REMOTE_DB, API_BASE_URL } from './db/config'
 import { remoteDbAdapter } from './db/remoteAdapter'
 
@@ -37,33 +37,22 @@ const SAMPLE_QUERIES = [
   "SELECT * FROM products WHERE price > 20 ORDER BY price DESC;",
 ]
 
-// Chart-specific queries for visualization demos
-const CHART_QUERIES = [
-  {
-    name: 'Users by City',
-    query: "SELECT city, COUNT(*) as count FROM users GROUP BY city ORDER BY count DESC LIMIT 8;",
-    chartType: 'bar' as ChartType,
-    columns: { labelColumn: 'city', valueColumns: ['count'] },
-  },
-  {
-    name: 'Order Status',
-    query: "SELECT status, COUNT(*) as count FROM orders GROUP BY status ORDER BY count DESC;",
-    chartType: 'horizontal-bar' as ChartType,
-    columns: { labelColumn: 'status', valueColumns: ['count'] },
-  },
-  {
-    name: 'Sales by Category',
-    query: "SELECT category, SUM(price) as total_sales FROM products GROUP BY category ORDER BY total_sales DESC;",
-    chartType: 'bar' as ChartType,
-    columns: { labelColumn: 'category', valueColumns: ['total_sales'] },
-  },
-  {
-    name: 'Product Categories',
-    query: "SELECT category, COUNT(*) as products, AVG(price) as avg_price FROM products GROUP BY category;",
-    chartType: 'grouped-bar' as ChartType,
-    columns: { labelColumn: 'category', valueColumns: ['products', 'avg_price'] },
-  },
+const CHART_TYPES: { value: ChartType; label: string }[] = [
+  { value: 'bar', label: '📊 Bar Chart' },
+  { value: 'horizontal-bar', label: '📊 Horizontal Bar' },
+  { value: 'pie', label: '🥧 Pie Chart' },
+  { value: 'donut', label: '🍩 Donut Chart' },
+  { value: 'grouped-bar', label: '📊 Grouped Bar' },
+  { value: 'stacked-bar', label: '📊 Stacked Bar' },
 ]
+
+interface ChartConfig {
+  id: string
+  type: ChartType
+  labelColumn: string
+  valueColumns: string[]
+  title: string
+}
 
 type ConnectionStatus = 'checking' | 'connected' | 'error' | null
 
@@ -74,7 +63,12 @@ export function App() {
   const [dataLoaded, setDataLoaded] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(USE_REMOTE_DB ? 'checking' : null)
   const [connectionError, setConnectionError] = useState<string | null>(null)
-  const [chartResults, setChartResults] = useState<Record<string, any>>({})
+  const [charts, setCharts] = useState<ChartConfig[]>([])
+  const [showChartModal, setShowChartModal] = useState(false)
+  const [newChartConfig, setNewChartConfig] = useState<Partial<ChartConfig>>({
+    type: 'bar',
+    title: '',
+  })
 
   const {
     containerRef,
@@ -188,33 +182,16 @@ export function App() {
         setDataLoaded(true)
         setStatusMessage('Sample data loaded. Click Run Query!')
         setTimeout(() => setStatusMessage(null), 3000)
-
-        // Run chart queries after data is loaded
-        loadChartData()
       } catch (e: any) {
         setStatusMessage('Error loading data: ' + e.message)
       }
     })()
   }, [editor])
 
-  // Function to load chart data
-  const loadChartData = async () => {
-    if (!editor) return
-
-    const results: Record<string, any> = {}
-    for (const chartQuery of CHART_QUERIES) {
-      try {
-        const result = await editor.execRaw(chartQuery.query)
-        results[chartQuery.name] = result
-      } catch (e) {
-        console.error(`Error loading chart data for ${chartQuery.name}:`, e)
-      }
-    }
-    setChartResults(results)
-  }
-
   const handleRun = useCallback(async () => {
     setStatusMessage(null)
+    // Clear charts when running new query
+    setCharts([])
     try {
       const result = await run()
       if (!result) {
@@ -244,6 +221,46 @@ export function App() {
     }
     setTimeout(() => setStatusMessage(null), 3000)
   }, [])
+
+  // Get available columns from results
+  const availableColumns = results?.columns?.map(c => c.name) || []
+  
+  // Filter to only numeric columns for value columns
+  const numericColumns = results?.rows?.length 
+    ? availableColumns.filter(col => {
+        const sampleVal = results.rows[0][col]
+        return typeof sampleVal === 'number'
+      })
+    : []
+
+  // Chart management functions
+  const addChart = () => {
+    if (!results || !newChartConfig.labelColumn || !newChartConfig.valueColumns?.length) {
+      setStatusMessage('Please select label and value columns')
+      setTimeout(() => setStatusMessage(null), 3000)
+      return
+    }
+
+    const chart: ChartConfig = {
+      id: Date.now().toString(),
+      type: newChartConfig.type || 'bar',
+      labelColumn: newChartConfig.labelColumn,
+      valueColumns: newChartConfig.valueColumns,
+      title: newChartConfig.title || `Chart ${charts.length + 1}`,
+    }
+
+    setCharts([...charts, chart])
+    setShowChartModal(false)
+    setNewChartConfig({ type: 'bar', title: '' })
+    setStatusMessage('Chart added successfully!')
+    setTimeout(() => setStatusMessage(null), 3000)
+  }
+
+  const removeChart = (id: string) => {
+    setCharts(charts.filter(c => c.id !== id))
+  }
+
+  const canAddChart = results && results.rows && results.rows.length > 0 && numericColumns.length > 0
 
   const isDark = theme === 'dark'
 
@@ -416,44 +433,79 @@ export function App() {
           />
         </div>
 
-        {/* Visualizations */}
-        {Object.keys(chartResults).length > 0 && (
+        {/* Visualizations Section */}
+        {canAddChart && (
           <div style={{ marginTop: 24 }}>
-            <h3 style={{
-              margin: '0 0 16px', fontSize: 14, fontWeight: 600,
-              color: isDark ? '#9ca3af' : '#6b7280',
-              textTransform: 'uppercase', letterSpacing: '0.5px',
-            }}>
-              Data Visualizations
-            </h3>
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))',
-              gap: 16,
-            }}>
-              {CHART_QUERIES.map((chartQuery) => {
-                const chartData = chartResults[chartQuery.name]
-                if (!chartData || !chartData.rows || chartData.rows.length === 0) return null
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <h3 style={{
+                margin: 0, fontSize: 14, fontWeight: 600,
+                color: isDark ? '#9ca3af' : '#6b7280',
+                textTransform: 'uppercase', letterSpacing: '0.5px',
+              }}>
+                Data Visualizations
+              </h3>
+              <button
+                onClick={() => setShowChartModal(true)}
+                style={{
+                  fontSize: 13, fontWeight: 500, padding: '6px 14px', borderRadius: 8,
+                  border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                  backgroundColor: isDark ? '#1f2937' : '#fff',
+                  color: isDark ? '#60a5fa' : '#2563eb',
+                  cursor: 'pointer',
+                }}
+              >
+                + Add Chart
+              </button>
+            </div>
 
-                return (
+            {charts.length > 0 ? (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))',
+                gap: 16,
+              }}>
+                {charts.map((chart) => (
                   <div
-                    key={chartQuery.name}
+                    key={chart.id}
                     style={{
                       borderRadius: 10,
                       border: `1px solid ${isDark ? '#1f2937' : '#e5e7eb'}`,
                       backgroundColor: isDark ? '#111318' : '#fff',
                       boxShadow: isDark ? '0 2px 12px rgba(0,0,0,.3)' : '0 2px 12px rgba(0,0,0,.04)',
                       overflow: 'hidden',
+                      position: 'relative',
                     }}
                   >
+                    <button
+                      onClick={() => removeChart(chart.id)}
+                      style={{
+                        position: 'absolute',
+                        top: 8,
+                        right: 8,
+                        width: 24,
+                        height: 24,
+                        borderRadius: '50%',
+                        border: 'none',
+                        backgroundColor: isDark ? '#374151' : '#f3f4f6',
+                        color: isDark ? '#9ca3af' : '#6b7280',
+                        cursor: 'pointer',
+                        fontSize: 14,
+                        lineHeight: 1,
+                        zIndex: 10,
+                      }}
+                      title="Remove chart"
+                    >
+                      ×
+                    </button>
                     <SqlChart
-                      data={chartData}
-                      type={chartQuery.chartType}
-                      columns={chartQuery.columns}
+                      data={results}
+                      type={chart.type}
+                      columns={{ labelColumn: chart.labelColumn, valueColumns: chart.valueColumns }}
                       options={{
-                        title: chartQuery.name,
+                        title: chart.title,
                         showValues: true,
                         showGrid: true,
+                        showLegend: chart.valueColumns.length > 1 || chart.type === 'pie' || chart.type === 'donut',
                         height: 280,
                         colors: isDark ? {
                           text: '#d1d5db',
@@ -463,8 +515,207 @@ export function App() {
                       }}
                     />
                   </div>
-                )
-              })}
+                ))}
+              </div>
+            ) : (
+              <div style={{
+                padding: 32,
+                textAlign: 'center',
+                borderRadius: 10,
+                border: `2px dashed ${isDark ? '#374151' : '#e5e7eb'}`,
+                color: isDark ? '#6b7280' : '#9ca3af',
+              }}>
+                <p style={{ margin: 0, fontSize: 14 }}>
+                  No charts yet. Click "Add Chart" to visualize your query results.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Add Chart Modal */}
+        {showChartModal && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}>
+            <div style={{
+              backgroundColor: isDark ? '#1f2937' : '#fff',
+              borderRadius: 12,
+              padding: 24,
+              width: 400,
+              maxWidth: '90vw',
+              maxHeight: '90vh',
+              overflow: 'auto',
+            }}>
+              <h3 style={{ margin: '0 0 20px 0', color: isDark ? '#e4e5e7' : '#1e1e1e' }}>
+                Add New Chart
+              </h3>
+
+              {/* Chart Title */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', marginBottom: 6, fontSize: 13, color: isDark ? '#9ca3af' : '#6b7280' }}>
+                  Chart Title
+                </label>
+                <input
+                  type="text"
+                  value={newChartConfig.title || ''}
+                  onChange={(e) => setNewChartConfig({ ...newChartConfig, title: e.target.value })}
+                  placeholder="Enter chart title"
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    borderRadius: 6,
+                    border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                    backgroundColor: isDark ? '#111827' : '#fff',
+                    color: isDark ? '#e4e5e7' : '#1e1e1e',
+                    fontSize: 14,
+                  }}
+                />
+              </div>
+
+              {/* Chart Type */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', marginBottom: 6, fontSize: 13, color: isDark ? '#9ca3af' : '#6b7280' }}>
+                  Chart Type
+                </label>
+                <select
+                  value={newChartConfig.type || 'bar'}
+                  onChange={(e) => setNewChartConfig({ ...newChartConfig, type: e.target.value as ChartType })}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    borderRadius: 6,
+                    border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                    backgroundColor: isDark ? '#111827' : '#fff',
+                    color: isDark ? '#e4e5e7' : '#1e1e1e',
+                    fontSize: 14,
+                  }}
+                >
+                  {CHART_TYPES.map(ct => (
+                    <option key={ct.value} value={ct.value}>{ct.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Label Column */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', marginBottom: 6, fontSize: 13, color: isDark ? '#9ca3af' : '#6b7280' }}>
+                  Label Column (X-axis / Pie segments)
+                </label>
+                <select
+                  value={newChartConfig.labelColumn || ''}
+                  onChange={(e) => setNewChartConfig({ ...newChartConfig, labelColumn: e.target.value })}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    borderRadius: 6,
+                    border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                    backgroundColor: isDark ? '#111827' : '#fff',
+                    color: isDark ? '#e4e5e7' : '#1e1e1e',
+                    fontSize: 14,
+                  }}
+                >
+                  <option value="">Select column...</option>
+                  {availableColumns.map(col => (
+                    <option key={col} value={col}>{col}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Value Columns */}
+              <div style={{ marginBottom: 24 }}>
+                <label style={{ display: 'block', marginBottom: 6, fontSize: 13, color: isDark ? '#9ca3af' : '#6b7280' }}>
+                  Value Column(s) (Y-axis) - Numeric columns only
+                </label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {numericColumns.map(col => (
+                    <label key={col} style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '4px 10px',
+                      borderRadius: 6,
+                      border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                      backgroundColor: newChartConfig.valueColumns?.includes(col)
+                        ? (isDark ? '#1e3a5f' : '#eff6ff')
+                        : 'transparent',
+                      cursor: 'pointer',
+                      fontSize: 13,
+                      color: isDark ? '#e4e5e7' : '#1e1e1e',
+                    }}>
+                      <input
+                        type="checkbox"
+                        checked={newChartConfig.valueColumns?.includes(col) || false}
+                        onChange={(e) => {
+                          const current = newChartConfig.valueColumns || []
+                          if (e.target.checked) {
+                            setNewChartConfig({ ...newChartConfig, valueColumns: [...current, col] })
+                          } else {
+                            setNewChartConfig({ ...newChartConfig, valueColumns: current.filter(c => c !== col) })
+                          }
+                        }}
+                        style={{ margin: 0 }}
+                      />
+                      {col}
+                    </label>
+                  ))}
+                </div>
+                {numericColumns.length === 0 && (
+                  <p style={{ margin: '8px 0 0', fontSize: 12, color: isDark ? '#f87171' : '#dc2626' }}>
+                    No numeric columns available for charting
+                  </p>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => {
+                    setShowChartModal(false)
+                    setNewChartConfig({ type: 'bar', title: '' })
+                  }}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: 6,
+                    border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                    backgroundColor: 'transparent',
+                    color: isDark ? '#9ca3af' : '#6b7280',
+                    cursor: 'pointer',
+                    fontSize: 14,
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={addChart}
+                  disabled={!newChartConfig.labelColumn || !newChartConfig.valueColumns?.length}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: 6,
+                    border: 'none',
+                    backgroundColor: (!newChartConfig.labelColumn || !newChartConfig.valueColumns?.length)
+                      ? (isDark ? '#374151' : '#9ca3af')
+                      : '#2563eb',
+                    color: '#fff',
+                    cursor: (!newChartConfig.labelColumn || !newChartConfig.valueColumns?.length)
+                      ? 'not-allowed'
+                      : 'pointer',
+                    fontSize: 14,
+                    fontWeight: 500,
+                  }}
+                >
+                  Add Chart
+                </button>
+              </div>
             </div>
           </div>
         )}
