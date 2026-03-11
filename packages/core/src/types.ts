@@ -211,3 +211,31 @@ export interface SqlEditorInstance {
   /** Destroy the editor and free resources */
   destroy(): void
 }
+
+// ---------------------------------------------------------------------------
+// CSV Export
+// ---------------------------------------------------------------------------
+
+export interface ExportOptions {
+  /** Filename for the downloaded file (without extension) */
+  filename?: string
+  /** Include column headers (default: true) */
+  includeHeaders?: boolean
+  /** Delimiter character (default: ',') */
+  delimiter?: string
+  /** Quote character (default: '"') */
+  quoteChar?: string
+  /** Line ending (default: '\n') */
+  lineEnding?: string
+}
+
+export interface ExportResult {
+  /** Whether the export was successful */
+  success: boolean
+  /** Number of rows exported */
+  rowCount: number
+  /** Filename that was used */
+  filename: string
+  /** Error message if export failed */
+  error?: string
+}

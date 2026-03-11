@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useSqlEditor, SqlResults } from '@vsql/react'
 import { configureSqlJsWasm } from '@vsql/core'
-import type { SqlDialect, ThemePreset } from '@vsql/core'
+import type { SqlDialect, ThemePreset, ExportResult } from '@vsql/core'
 import { USE_REMOTE_DB, API_BASE_URL } from './db/config'
 import { remoteDbAdapter } from './db/remoteAdapter'
 
@@ -187,23 +187,14 @@ export function App() {
     changeTheme(t)
   }
 
-  const handleExport = useCallback(() => {
-    if (!results) {
-      setStatusMessage('No results to export. Run a query first.')
-      setTimeout(() => setStatusMessage(null), 3000)
-      return
-    }
-
-    const success = exportToCSV(results)
-    if (success) {
-      const rowCount = results.rows?.length || 0
-      setStatusMessage(`Successfully exported ${rowCount} rows to CSV!`)
-      setTimeout(() => setStatusMessage(null), 3000)
+  const handleExport = useCallback((result: ExportResult) => {
+    if (result.success) {
+      setStatusMessage(`Successfully exported ${result.rowCount} rows to ${result.filename}!`)
     } else {
-      setStatusMessage('Failed to export. No data available.')
-      setTimeout(() => setStatusMessage(null), 3000)
+      setStatusMessage(`Export failed: ${result.error || 'Unknown error'}`)
     }
-  }, [results])
+    setTimeout(() => setStatusMessage(null), 3000)
+  }, [])
 
   const isDark = theme === 'dark'
 
@@ -283,20 +274,6 @@ export function App() {
           >
             {isRunning ? 'Running...' : 'Run Query'}
           </button>
-
-          <button
-            onClick={handleExport}
-            disabled={!results || !results.rows || results.rows.length === 0}
-            style={{
-              ...btnStyle(isDark, false),
-              opacity: (!results || !results.rows || results.rows.length === 0) ? 0.6 : 1,
-              backgroundColor: isDark ? '#1e3a5f' : '#eff6ff',
-              color: isDark ? '#60a5fa' : '#2563eb',
-              border: `1px solid ${isDark ? '#1e3a5f' : '#bfdbfe'}`,
-            }}
-          >
-            Export CSV
-          </button>
         </div>
 
         {/* Editor */}
@@ -373,6 +350,9 @@ export function App() {
             maxHeight={350}
             showRowCount
             showElapsed
+            showExport
+            exportButtonText="Export CSV"
+            onExport={handleExport}
             emptyMessage="Click 'Run Query' to see results"
             style={{
               ...(isDark ? {
@@ -380,6 +360,7 @@ export function App() {
                 '--vsql-badge-bg': '#1e3a5f', '--vsql-badge-fg': '#60a5fa',
                 '--vsql-th-bg': '#151921', '--vsql-th-fg': '#9ca3af',
                 '--vsql-row-alt': '#0d0f14',
+                '--vsql-export-bg': '#2563eb', '--vsql-export-fg': '#fff',
               } as any : {}),
             }}
           />
@@ -449,40 +430,4 @@ function btnStyle(isDark: boolean, primary: boolean): React.CSSProperties {
     color: isDark ? '#d1d5db' : '#4b5563',
     cursor: 'pointer',
   }
-}
-
-// Helper function to export query results to CSV
-function exportToCSV(results: any): boolean {
-  if (!results || !results.columns || !results.rows) {
-    return false
-  }
-
-  const headers = results.columns.map((col: any) => col.name || col)
-  const csvRows: string[] = []
-
-  // Add header row
-  csvRows.push(headers.map(h => `"${String(h).replace(/"/g, '""')}"`).join(','))
-
-  // Add data rows
-  for (const row of results.rows) {
-    const values = row.map((val: any) => {
-      if (val === null || val === undefined) return ''
-      const str = String(val)
-      return `"${str.replace(/"/g, '""')}"`
-    })
-    csvRows.push(values.join(','))
-  }
-
-  const csvContent = csvRows.join('\n')
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `query-results-${new Date().toISOString().slice(0, 10)}.csv`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
-
-  return true
 }

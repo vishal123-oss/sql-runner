@@ -1,4 +1,5 @@
-import type { QueryResult } from '@vsql/core'
+import type { QueryResult, ExportOptions, ExportResult } from '@vsql/core'
+import { exportToCSV } from '@vsql/core'
 
 export interface SqlResultsProps {
   /** Query result data to display */
@@ -15,6 +16,14 @@ export interface SqlResultsProps {
   showElapsed?: boolean
   /** Empty state message */
   emptyMessage?: string
+  /** Show export button */
+  showExport?: boolean
+  /** Export button text */
+  exportButtonText?: string
+  /** Export options (filename, delimiter, etc.) */
+  exportOptions?: ExportOptions
+  /** Callback when export completes */
+  onExport?: (result: ExportResult) => void
 }
 
 export function SqlResults({
@@ -25,7 +34,19 @@ export function SqlResults({
   showRowCount = true,
   showElapsed = true,
   emptyMessage = 'Run a query to see results',
+  showExport = false,
+  exportButtonText = 'Export CSV',
+  exportOptions,
+  onExport,
 }: SqlResultsProps) {
+  const handleExport = () => {
+    if (!data) return
+    const result = exportToCSV(data, exportOptions)
+    onExport?.(result)
+  }
+
+  const canExport = data && data.columns.length > 0 && data.rows.length > 0
+
   if (!data) {
     return (
       <div className={cls('vsql-results vsql-results--empty', className)} style={style}>
@@ -49,7 +70,7 @@ export function SqlResults({
 
   return (
     <div className={cls('vsql-results', className)} style={style}>
-      {(showRowCount || showElapsed) && (
+      {(showRowCount || showElapsed || showExport) && (
         <div style={styles.meta}>
           {showRowCount && (
             <span style={styles.badge}>
@@ -58,6 +79,19 @@ export function SqlResults({
           )}
           {showElapsed && data.elapsed != null && (
             <span style={styles.elapsed}>{data.elapsed}ms</span>
+          )}
+          {showExport && (
+            <button
+              onClick={handleExport}
+              disabled={!canExport}
+              style={{
+                ...styles.exportBtn,
+                opacity: canExport ? 1 : 0.5,
+                cursor: canExport ? 'pointer' : 'not-allowed',
+              }}
+            >
+              {exportButtonText}
+            </button>
           )}
         </div>
       )}
@@ -127,6 +161,16 @@ const styles: Record<string, React.CSSProperties> = {
   elapsed: {
     color: 'var(--vsql-muted, #9ca3af)',
     fontSize: '12px',
+  },
+  exportBtn: {
+    marginLeft: 'auto',
+    padding: '4px 12px',
+    borderRadius: '6px',
+    border: '1px solid var(--vsql-border, #e5e7eb)',
+    backgroundColor: 'var(--vsql-export-bg, #2563eb)',
+    color: 'var(--vsql-export-fg, #fff)',
+    fontSize: '12px',
+    fontWeight: 500,
   },
   scroll: {
     overflow: 'auto',

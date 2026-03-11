@@ -6,6 +6,7 @@ export { LocalExecutor, configureSqlJsWasm } from './executor'
 export { createRemoteAdapter } from './remoteAdapter'
 export { buildTheme } from './theme'
 export { toCodeMirrorSchema, getTableNames, getAllColumns, getColumnsForTable } from './schema'
+export { exportToCSV, convertToCSV } from './export'
 
 export type {
   SqlDialect,
@@ -21,5 +22,7 @@ export type {
   ThemeTokenColors,
   SqlEditorConfig,
   SqlEditorInstance,
+  ExportOptions,
+  ExportResult,
 } from './types'
 export type { RemoteExecutorConfig } from './remoteAdapter'

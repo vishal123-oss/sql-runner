@@ -13,6 +13,9 @@ export type { UseSqlEditorOptions, UseSqlEditorReturn } from './useSqlEditor'
 export { createRemoteAdapter } from '@vsql/core'
 export type { RemoteExecutorConfig } from '@vsql/core'
 
+// Re-export CSV export utilities
+export { exportToCSV, convertToCSV } from '@vsql/core'
+
 // Re-export commonly used types from core
 export type {
   SqlDialect,
@@ -24,4 +27,6 @@ export type {
   ThemeConfig,
   SqlEditorConfig,
   SqlEditorInstance,
+  ExportOptions,
+  ExportResult,
 } from '@vsql/core'
