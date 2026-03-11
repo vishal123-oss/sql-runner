@@ -14,6 +14,8 @@ const SAMPLE_SCHEMA = {
     { name: 'email', type: 'TEXT' },
     { name: 'age', type: 'INTEGER' },
     { name: 'city', type: 'TEXT' },
+    { name: 'department', type: 'TEXT' },
+    { name: 'salary', type: 'REAL' },
   ],
   orders: [
     { name: 'id', type: 'INTEGER' },
@@ -21,20 +23,64 @@ const SAMPLE_SCHEMA = {
     { name: 'product', type: 'TEXT' },
     { name: 'amount', type: 'REAL' },
     { name: 'status', type: 'TEXT' },
+    { name: 'order_date', type: 'TEXT' },
   ],
   products: [
     { name: 'id', type: 'INTEGER' },
     { name: 'name', type: 'TEXT' },
     { name: 'price', type: 'REAL' },
     { name: 'category', type: 'TEXT' },
+    { name: 'stock', type: 'INTEGER' },
+  ],
+  sales: [
+    { name: 'id', type: 'INTEGER' },
+    { name: 'region', type: 'TEXT' },
+    { name: 'product', type: 'TEXT' },
+    { name: 'quantity', type: 'INTEGER' },
+    { name: 'revenue', type: 'REAL' },
+    { name: 'month', type: 'TEXT' },
   ],
 }
 
 const SAMPLE_QUERIES = [
-  'SELECT * FROM users;',
-  'SELECT u.name, o.product, o.amount FROM users u JOIN orders o ON u.id = o.user_id;',
-  "SELECT city, COUNT(*) as total, AVG(age) as avg_age FROM users GROUP BY city HAVING total > 1;",
-  "SELECT * FROM products WHERE price > 20 ORDER BY price DESC;",
+  'SELECT * FROM users LIMIT 10;',
+  'SELECT city, COUNT(*) as count FROM users GROUP BY city ORDER BY count DESC;',
+  'SELECT department, AVG(salary) as avg_salary FROM users GROUP BY department;',
+  'SELECT status, COUNT(*) as count FROM orders GROUP BY status;',
+]
+
+// Suggested queries specifically for visualization
+const CHART_SUGGESTION_QUERIES = [
+  {
+    name: 'Users by City',
+    query: "SELECT city, COUNT(*) as count FROM users GROUP BY city ORDER BY count DESC LIMIT 10;",
+    description: 'Bar chart showing user distribution by city'
+  },
+  {
+    name: 'Order Status',
+    query: "SELECT status, COUNT(*) as count FROM orders GROUP BY status ORDER BY count DESC;",
+    description: 'Pie chart showing order status distribution'
+  },
+  {
+    name: 'Sales by Region',
+    query: "SELECT region, SUM(revenue) as total_revenue, SUM(quantity) as total_qty FROM sales GROUP BY region ORDER BY total_revenue DESC;",
+    description: 'Bar chart comparing revenue and quantity by region'
+  },
+  {
+    name: 'Department Salaries',
+    query: "SELECT department, AVG(salary) as avg_salary, COUNT(*) as employees FROM users GROUP BY department ORDER BY avg_salary DESC;",
+    description: 'Grouped bar chart showing salary and employee count'
+  },
+  {
+    name: 'Monthly Revenue',
+    query: "SELECT month, SUM(revenue) as revenue FROM sales GROUP BY month ORDER BY month;",
+    description: 'Bar chart showing monthly revenue trend'
+  },
+  {
+    name: 'Product Categories',
+    query: "SELECT category, COUNT(*) as products, SUM(stock) as total_stock FROM products GROUP BY category;",
+    description: 'Stacked bar chart showing products and stock by category'
+  },
 ]
 
 const CHART_TYPES: { value: ChartType; label: string }[] = [
@@ -136,49 +182,78 @@ export function App() {
     ;(async () => {
       try {
         await editor.execRaw(`
-          CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, age INTEGER, city TEXT);
-          CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, user_id INTEGER, product TEXT, amount REAL, status TEXT);
-          CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, name TEXT, price REAL, category TEXT);
+          CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, age INTEGER, city TEXT, department TEXT, salary REAL);
+          CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, user_id INTEGER, product TEXT, amount REAL, status TEXT, order_date TEXT);
+          CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, name TEXT, price REAL, category TEXT, stock INTEGER);
+          CREATE TABLE IF NOT EXISTS sales (id INTEGER PRIMARY KEY, region TEXT, product TEXT, quantity INTEGER, revenue REAL, month TEXT);
         `)
-        // Generate 100 users
+
+        // Generate 100 users with departments and salaries
         const firstNames = ['Alice', 'Bob', 'Charlie', 'Diana', 'Eve', 'Frank', 'Grace', 'Henry', 'Ivy', 'Jack', 'Kate', 'Liam', 'Mia', 'Noah', 'Olivia', 'Peter', 'Quinn', 'Ruby', 'Sam', 'Tina', 'Uma', 'Victor', 'Wendy', 'Xavier', 'Yara', 'Zack']
         const cities = ['New York', 'San Francisco', 'Chicago', 'Los Angeles', 'Houston', 'Phoenix', 'Seattle', 'Denver', 'Boston', 'Miami']
+        const departments = ['Engineering', 'Marketing', 'Sales', 'HR', 'Finance', 'Operations', 'Support', 'Design', 'Legal', 'Product']
         const domains = ['gmail.com', 'yahoo.com', 'outlook.com', 'example.com', 'mail.com']
 
         let usersInsert = ''
         for (let i = 1; i <= 100; i++) {
           const name = firstNames[i % firstNames.length] + (i > 26 ? i : '')
           const email = `user${i}@${domains[i % domains.length]}`
-          const age = 20 + (i % 50)
+          const age = 20 + (i % 45)
           const city = cities[i % cities.length]
-          usersInsert += `INSERT OR IGNORE INTO users VALUES (${i}, '${name}', '${email}', ${age}, '${city}');\n`
+          const department = departments[i % departments.length]
+          const salary = 50000 + (i % 10) * 15000 + (i % 5) * 5000
+          usersInsert += `INSERT OR IGNORE INTO users VALUES (${i}, '${name}', '${email}', ${age}, '${city}', '${department}', ${salary});\n`
         }
         await editor.execRaw(usersInsert)
-        // Generate 100 orders
-        const products = ['Laptop', 'Phone', 'Tablet', 'Monitor', 'Keyboard', 'Mouse', 'Headphones', 'Webcam', 'Speaker', 'Charger', 'Cable', 'Case', 'Stand', 'Dock', 'Printer']
+
+        // Generate 150 orders
+        const products = ['Laptop', 'Phone', 'Tablet', 'Monitor', 'Keyboard', 'Mouse', 'Headphones', 'Webcam', 'Speaker', 'Charger']
         const statuses = ['completed', 'pending', 'shipped', 'cancelled', 'processing']
+        const months = ['2024-01', '2024-02', '2024-03', '2024-04', '2024-05', '2024-06']
 
         let ordersInsert = ''
-        for (let i = 1; i <= 100; i++) {
+        for (let i = 1; i <= 150; i++) {
           const userId = (i % 100) + 1
           const product = products[i % products.length]
           const amount = (19.99 + (i * 7.5)).toFixed(2)
           const status = statuses[i % statuses.length]
-          ordersInsert += `INSERT OR IGNORE INTO orders VALUES (${i}, ${userId}, '${product}', ${amount}, '${status}');\n`
+          const orderDate = months[i % months.length] + '-' + String((i % 28) + 1).padStart(2, '0')
+          ordersInsert += `INSERT OR IGNORE INTO orders VALUES (${i}, ${userId}, '${product}', ${amount}, '${status}', '${orderDate}');\n`
         }
         await editor.execRaw(ordersInsert)
-        // Generate 100 products
-        const productNames = ['Laptop', 'Phone', 'Tablet', 'Monitor', 'Keyboard', 'Mouse', 'Headphones', 'Webcam', 'Speaker', 'Charger', 'Cable', 'Case', 'Stand', 'Dock', 'Printer', 'Scanner', 'Router', 'SSD', 'RAM', 'GPU']
+
+        // Generate 50 products
+        const productNames = ['Laptop', 'Phone', 'Tablet', 'Monitor', 'Keyboard', 'Mouse', 'Headphones', 'Webcam', 'Speaker', 'Charger', 'Cable', 'Case', 'Stand', 'Dock', 'Printer']
         const categories = ['Electronics', 'Accessories', 'Audio', 'Storage', 'Networking', 'Peripherals']
 
         let productsInsert = ''
-        for (let i = 1; i <= 100; i++) {
-          const name = productNames[i % productNames.length] + (i > 20 ? ` Pro ${Math.floor(i / 20)}` : '')
+        for (let i = 1; i <= 50; i++) {
+          const name = productNames[i % productNames.length] + (i > 15 ? ` Pro ${Math.floor(i / 15)}` : '')
           const price = (29.99 + (i * 4.99)).toFixed(2)
           const category = categories[i % categories.length]
-          productsInsert += `INSERT OR IGNORE INTO products VALUES (${i}, '${name}', ${price}, '${category}');\n`
+          const stock = 10 + (i % 100)
+          productsInsert += `INSERT OR IGNORE INTO products VALUES (${i}, '${name}', ${price}, '${category}', ${stock});\n`
         }
         await editor.execRaw(productsInsert)
+
+        // Generate sales data
+        const regions = ['North', 'South', 'East', 'West', 'Central']
+        const salesProducts = ['Laptop', 'Phone', 'Tablet', 'Monitor', 'Keyboard']
+
+        let salesInsert = ''
+        let salesId = 1
+        for (const region of regions) {
+          for (const product of salesProducts) {
+            for (const month of months) {
+              const quantity = 50 + Math.floor(Math.random() * 150)
+              const revenue = (quantity * (100 + Math.random() * 200)).toFixed(2)
+              salesInsert += `INSERT OR IGNORE INTO sales VALUES (${salesId}, '${region}', '${product}', ${quantity}, ${revenue}, '${month}');\n`
+              salesId++
+            }
+          }
+        }
+        await editor.execRaw(salesInsert)
+
         setDataLoaded(true)
         setStatusMessage('Sample data loaded. Click Run Query!')
         setTimeout(() => setStatusMessage(null), 3000)
@@ -373,6 +448,38 @@ export function App() {
               {q.length > 40 ? q.slice(0, 40) + '...' : q}
             </button>
           ))}
+        </div>
+
+        {/* Chart suggestion queries */}
+        <div style={{ marginTop: 16 }}>
+          <h4 style={{
+            margin: '0 0 8px 0', fontSize: 12, fontWeight: 600,
+            color: isDark ? '#9ca3af' : '#6b7280',
+            textTransform: 'uppercase', letterSpacing: '0.5px',
+          }}>
+            📊 Visualization Queries
+          </h4>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
+            {CHART_SUGGESTION_QUERIES.map((item, i) => (
+              <button
+                key={i}
+                onClick={() => setSql(item.query)}
+                style={{
+                  fontSize: 12, padding: '8px 12px', borderRadius: 8,
+                  border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                  backgroundColor: isDark ? '#1f2937' : '#fff',
+                  color: isDark ? '#e4e5e7' : '#1e1e1e',
+                  cursor: 'pointer',
+                  textAlign: 'left' as const,
+                  transition: 'all 0.15s ease',
+                }}
+                title={item.query}
+              >
+                <div style={{ fontWeight: 500, marginBottom: 2 }}>{item.name}</div>
+                <div style={{ fontSize: 10, color: isDark ? '#6b7280' : '#9ca3af' }}>{item.description}</div>
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Status / errors */}
