@@ -13,7 +13,7 @@ export { useSqlEditor } from './useSqlEditor'
 export type { UseSqlEditorOptions, UseSqlEditorReturn } from './useSqlEditor'
 
 // Re-export remote adapter so parent app can pass API config as "credentials"
-export { createRemoteAdapter } from '@vsql/core'
+export { createRemoteAdapter, QueryCancelledError } from '@vsql/core'
 export type { RemoteExecutorConfig } from '@vsql/core'
 
 // Re-export export utilities

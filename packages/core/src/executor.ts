@@ -39,9 +39,20 @@ function loadSqlJs(): Promise<any> {
   return sqlJsPromise
 }
 
+/**
+ * Error thrown when a query is cancelled
+ */
+export class QueryCancelledError extends Error {
+  constructor(message: string = 'Query was cancelled') {
+    super(message)
+    this.name = 'QueryCancelledError'
+  }
+}
+
 export class LocalExecutor implements DatabaseAdapter {
   private db: any = null
   private initPromise: Promise<void> | null = null
+  private currentAbortController: AbortController | null = null
 
   constructor(wasmUrl?: string) {
     if (wasmUrl) configureSqlJsWasm(wasmUrl)
@@ -57,22 +68,50 @@ export class LocalExecutor implements DatabaseAdapter {
     return this.initPromise
   }
 
-  async execute(sql: string): Promise<QueryResult> {
+  /**
+   * Cancel the currently running query
+   */
+  cancel(): void {
+    if (this.currentAbortController) {
+      this.currentAbortController.abort()
+      this.currentAbortController = null
+    }
+  }
+
+  async execute(sql: string, signal?: AbortSignal): Promise<QueryResult> {
     await this.init()
     const start = performance.now()
+
+    // Check if already cancelled
+    if (signal?.aborted) {
+      throw new QueryCancelledError()
+    }
 
     try {
       const trimmed = sql.trim()
       const isSelect = /^\s*(SELECT|PRAGMA|EXPLAIN|WITH)\b/i.test(trimmed)
 
+      // For local SQLite, we simulate cancellation by checking periodically
+      // Note: sql.js doesn't support true async cancellation, so we check at key points
       if (isSelect) {
         const stmt = this.db.prepare(trimmed)
         const colNames: string[] = stmt.getColumnNames()
         const rawRows: any[][] = []
+        
         while (stmt.step()) {
+          // Check for cancellation every 100 rows
+          if (rawRows.length % 100 === 0 && signal?.aborted) {
+            stmt.free()
+            throw new QueryCancelledError()
+          }
           rawRows.push(stmt.get())
         }
         stmt.free()
+
+        // Final cancellation check
+        if (signal?.aborted) {
+          throw new QueryCancelledError()
+        }
 
         const elapsed = Math.round(performance.now() - start)
         const columns: QueryResultColumn[] = colNames.map((name) => ({ name }))
@@ -83,6 +122,11 @@ export class LocalExecutor implements DatabaseAdapter {
         })
 
         return { columns, rows, rowCount: rows.length, elapsed, sql }
+      }
+
+      // For non-SELECT queries
+      if (signal?.aborted) {
+        throw new QueryCancelledError()
       }
 
       this.db.exec(trimmed)
@@ -96,6 +140,9 @@ export class LocalExecutor implements DatabaseAdapter {
         sql,
       }
     } catch (e: any) {
+      if (e instanceof QueryCancelledError) {
+        throw e
+      }
       throw new Error(e.message || String(e))
     }
   }
@@ -140,6 +187,7 @@ export class LocalExecutor implements DatabaseAdapter {
   }
 
   destroy(): void {
+    this.cancel()
     if (this.db) {
       this.db.close()
       this.db = null
@@ -153,11 +201,37 @@ export class LocalExecutor implements DatabaseAdapter {
 // ---------------------------------------------------------------------------
 
 export class AdapterExecutor {
+  private currentAbortController: AbortController | null = null
+
   constructor(private adapter: DatabaseAdapter) {}
 
-  async execute(sql: string): Promise<QueryResult> {
+  /**
+   * Cancel the currently running query
+   */
+  cancel(): void {
+    if (this.currentAbortController) {
+      this.currentAbortController.abort()
+      this.currentAbortController = null
+    }
+    // Also call adapter's cancel if available
+    this.adapter.cancel?.()
+  }
+
+  async execute(sql: string, signal?: AbortSignal): Promise<QueryResult> {
     const start = performance.now()
-    const result = await this.adapter.execute(sql)
+    
+    // Check if already cancelled
+    if (signal?.aborted) {
+      throw new QueryCancelledError()
+    }
+
+    const result = await this.adapter.execute(sql, signal)
+    
+    // Check if cancelled during execution
+    if (signal?.aborted) {
+      throw new QueryCancelledError()
+    }
+    
     result.elapsed = result.elapsed ?? Math.round(performance.now() - start)
     result.sql = sql
     return result
@@ -168,6 +242,7 @@ export class AdapterExecutor {
   }
 
   destroy(): void {
+    this.cancel()
     this.adapter.destroy?.()
   }
 }

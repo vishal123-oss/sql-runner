@@ -72,7 +72,9 @@ export interface ValidationError {
 
 export interface DatabaseAdapter {
   /** Execute a SQL statement and return the result. */
-  execute(sql: string): Promise<QueryResult>
+  execute(sql: string, signal?: AbortSignal): Promise<QueryResult>
+  /** Optional: cancel the currently running query. */
+  cancel?(): void
   /** Optional: return the schema for autocomplete. */
   getSchema?(): Promise<SchemaDefinition>
   /** Optional: cleanup. */
@@ -180,6 +182,9 @@ export interface SqlEditorConfig {
 export interface SqlEditorInstance {
   /** Execute the current editor content */
   run(): Promise<QueryResult | undefined>
+
+  /** Cancel the currently running query */
+  cancel(): void
 
   /** Force validation and return errors */
   validate(): ValidationError[]

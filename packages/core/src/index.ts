@@ -2,7 +2,7 @@
 
 export { createSqlEditor } from './editor'
 export { validateSql } from './validator'
-export { LocalExecutor, configureSqlJsWasm } from './executor'
+export { LocalExecutor, configureSqlJsWasm, QueryCancelledError } from './executor'
 export { createRemoteAdapter } from './remoteAdapter'
 export { buildTheme } from './theme'
 export { toCodeMirrorSchema, getTableNames, getAllColumns, getColumnsForTable } from './schema'

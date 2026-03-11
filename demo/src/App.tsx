@@ -123,6 +123,7 @@ export function App() {
     results,
     isRunning,
     run,
+    cancel,
     setSql,
     setDialect: changeDialect,
     setTheme: changeTheme,
@@ -404,17 +405,30 @@ export function App() {
             </span>
           )}
 
-          <button
-            onClick={handleRun}
-            disabled={isRunning || !dataLoaded}
-            style={{
-              ...btnStyle(isDark, true),
-              opacity: (isRunning || !dataLoaded) ? 0.6 : 1,
-              minWidth: 120,
-            }}
-          >
-            {isRunning ? 'Running...' : 'Run Query'}
-          </button>
+          {isRunning ? (
+            <button
+              onClick={cancel}
+              style={{
+                fontSize: 13, fontWeight: 600, padding: '8px 18px', borderRadius: 8,
+                border: 'none', backgroundColor: '#dc2626', color: '#fff', cursor: 'pointer',
+                minWidth: 120,
+              }}
+            >
+              Cancel
+            </button>
+          ) : (
+            <button
+              onClick={handleRun}
+              disabled={!dataLoaded}
+              style={{
+                ...btnStyle(isDark, true),
+                opacity: !dataLoaded ? 0.6 : 1,
+                minWidth: 120,
+              }}
+            >
+              Run Query
+            </button>
+          )}
         </div>
 
         {/* Editor */}
