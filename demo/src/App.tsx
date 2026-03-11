@@ -189,7 +189,8 @@ export function App() {
 
   const handleExport = useCallback((result: ExportResult) => {
     if (result.success) {
-      setStatusMessage(`Successfully exported ${result.rowCount} rows to ${result.filename}!`)
+      const formatLabel = result.format === 'xlsx' ? 'Excel' : result.format.toUpperCase()
+      setStatusMessage(`Successfully exported ${result.rowCount} rows to ${formatLabel} (${result.filename})!`)
     } else {
       setStatusMessage(`Export failed: ${result.error || 'Unknown error'}`)
     }
@@ -351,7 +352,7 @@ export function App() {
             showRowCount
             showElapsed
             showExport
-            exportButtonText="Export CSV"
+            exportButtonText="Export"
             onExport={handleExport}
             emptyMessage="Click 'Run Query' to see results"
             style={{
@@ -361,6 +362,7 @@ export function App() {
                 '--vsql-th-bg': '#151921', '--vsql-th-fg': '#9ca3af',
                 '--vsql-row-alt': '#0d0f14',
                 '--vsql-export-bg': '#2563eb', '--vsql-export-fg': '#fff',
+                '--vsql-dropdown-bg': '#1f2937', '--vsql-dropdown-fg': '#e4e5e7',
               } as any : {}),
             }}
           />

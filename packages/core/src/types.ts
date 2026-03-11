@@ -213,20 +213,32 @@ export interface SqlEditorInstance {
 }
 
 // ---------------------------------------------------------------------------
-// CSV Export
+// Export
 // ---------------------------------------------------------------------------
+
+/** Supported export formats */
+export type ExportFormat = 'csv' | 'json' | 'xlsx'
 
 export interface ExportOptions {
   /** Filename for the downloaded file (without extension) */
   filename?: string
+  /** Export format (default: 'csv') */
+  format?: ExportFormat
   /** Include column headers (default: true) */
   includeHeaders?: boolean
-  /** Delimiter character (default: ',') */
+  /** Delimiter character for CSV (default: ',') */
   delimiter?: string
-  /** Quote character (default: '"') */
+  /** Quote character for CSV (default: '"') */
   quoteChar?: string
-  /** Line ending (default: '\n') */
+  /** Line ending for CSV (default: '\n') */
   lineEnding?: string
+  /** JSON formatting options */
+  json?: {
+    /** Pretty print JSON (default: true) */
+    pretty?: boolean
+    /** Include metadata (columns, rowCount) in output (default: false) */
+    includeMetadata?: boolean
+  }
 }
 
 export interface ExportResult {
@@ -236,6 +248,8 @@ export interface ExportResult {
   rowCount: number
   /** Filename that was used */
   filename: string
+  /** Format that was used */
+  format: ExportFormat
   /** Error message if export failed */
   error?: string
 }
