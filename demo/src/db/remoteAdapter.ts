@@ -16,10 +16,13 @@ export const remoteDbAdapter: DatabaseAdapter = {
     }
     if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`
 
+    // Get current user from localStorage or default
+    const user = typeof window !== 'undefined' ? localStorage.getItem('vsql_user') || 'anonymous' : 'anonymous'
+
     const res = await fetch(`${API_BASE_URL}/api/query`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ sql }),
+      body: JSON.stringify({ sql, user }),
     })
 
     if (!res.ok) {

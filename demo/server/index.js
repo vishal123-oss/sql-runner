@@ -24,39 +24,48 @@ app.use(cors())
 app.use(express.json())
 
 // ============================================================================
-// BACKEND-ONLY ACCESS CONTROL CONFIG (NEVER expose to client!)
+// DYNAMIC ACCESS CONTROL CONFIG & AUDIT LOG
 // ============================================================================
-// Available modes:
-//   'read-only'  - SELECT, WITH, PRAGMA, SHOW, DESCRIBE, EXPLAIN only
-//   'write'      - Above + INSERT, CREATE TABLE, COPY
-//   'update'     - Above + UPDATE
-//   'delete'     - Above + DELETE, TRUNCATE, DROP
-//   'full'       - All operations
-//
-// You can also use blockedPatterns to block specific dangerous SQL.
-const ACCESS_CONTROL_CONFIG = {
-  // Change this to set the access level:
-  mode: process.env.ACCESS_MODE || 'read-only', // 'no-access' | 'read-only' | 'write' | 'update' | 'delete' | 'full'
-  
-  // Additional blocked operations (overrides mode defaults)
+let ACCESS_CONTROL_CONFIG = {
+  mode: process.env.ACCESS_MODE || 'read-only',
   blockedOperations: [],
-  
-  // Regex patterns for extra blocking (e.g., block DROP DATABASE)
-  blockedPatterns: [
-    // Uncomment to block dropping databases:
-    // '\\bDROP\\s+DATABASE\\b',
-    // '\\bpg_terminate_backend\\b',
-  ],
-  
-  // Limit result rows (backend enforces)
+  blockedPatterns: [],
   maxRowsLimit: parseInt(process.env.MAX_ROWS || '1000', 10),
-  
-  // Prevent multi-statement injection
   allowMultiStatement: false,
-  
-  // Block transactions in read-only
   allowTransactions: true,
+  requireWhereForModify: false,
+  blockSelectStar: false,
+  allowFullTableScan: true,
 }
+
+const auditLogs = []
+
+function addAuditLog(user, sql, resultSize, status, error = null) {
+  auditLogs.unshift({
+    id: Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+    user: user || 'anonymous',
+    sql,
+    timestamp: new Date().toISOString(),
+    resultSize: resultSize || 0,
+    status,
+    error
+  })
+  // Keep last 100 logs
+  if (auditLogs.length > 100) auditLogs.pop()
+}
+
+// ========== Update config endpoint ==========
+app.post('/api/config', (req, res) => {
+  const newConfig = req.body
+  ACCESS_CONTROL_CONFIG = { ...ACCESS_CONTROL_CONFIG, ...newConfig }
+  res.json({ ok: true, config: ACCESS_CONTROL_CONFIG })
+})
+
+// ========== Audit logs endpoint ==========
+app.get('/api/audit-logs', (req, res) => {
+  res.json(auditLogs)
+})
+
 
 const MODE_DEFAULTS = {
   'no-access': [],
@@ -119,7 +128,7 @@ const DB_TYPE = (process.env.DB_TYPE || 'postgres').toLowerCase()
 
 // ========== Query endpoint (WITH ACCESS CONTROL ENFORCEMENT) ==========
 app.post('/api/query', async (req, res) => {
-  const { sql } = req.body || {}
+  const { sql, user } = req.body || {}
   if (!sql || typeof sql !== 'string') {
     return res.status(400).json({ error: 'Missing sql in body' })
   }
@@ -131,6 +140,7 @@ app.post('/api/query', async (req, res) => {
   const validation = validateAccessControl(sql)
   if (!validation.allowed) {
     console.warn(`[SECURITY] Blocked query from client: ${validation.reason}`)
+    addAuditLog(user, sql, 0, 'blocked', validation.reason)
     return res.status(403).json({
       error: `Access denied: ${validation.reason}`,
       code: 'ACCESS_DENIED',
@@ -190,12 +200,15 @@ app.post('/api/query', async (req, res) => {
     }
 
     const elapsed = Date.now() - start
+    addAuditLog(user, sql, rows.length, 'success')
     res.json({ columns, rows, rowCount: rows.length, elapsed })
   } catch (err) {
     const message = err.message || String(err)
+    addAuditLog(user, sql, 0, 'error', message)
     res.status(500).json({ error: message })
   }
 })
+
 
 // ========== Access control hints endpoint (for client UX) ==========
 // This is SAFE to expose - it's just UI hints, not the real config

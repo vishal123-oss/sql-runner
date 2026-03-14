@@ -47,7 +47,37 @@ export function App() {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(USE_REMOTE_DB ? 'checking' : null)
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const [accessHints, setAccessHints] = useState<AccessControlHints | null>(null)
-  const [showGuardrails, setShowGuardrails] = useState(true)
+  const [showGuardrails, setShowGuardrails] = useState(false)
+  const [showAuditLogs, setShowAuditLogs] = useState(false)
+  const [auditLogs, setAuditLogs] = useState<any[]>([])
+  const [userName, setUserName] = useState(localStorage.getItem('vsql_user') || 'Admin')
+
+  useEffect(() => {
+    localStorage.setItem('vsql_user', userName)
+  }, [userName])
+
+  const fetchAuditLogs = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/api/audit-logs`)
+      if (res.ok) setAuditLogs(await res.json())
+    } catch {}
+  }, [])
+
+  const updateBackendConfig = async (updates: any) => {
+    try {
+      await fetch(`${API_BASE_URL.replace(/\/$/, '')}/api/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      })
+      // Refresh hints
+      const hintsRes = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/api/access-hints`)
+      if (hintsRes.ok) setAccessHints(await hintsRes.json())
+    } catch (e) {
+      console.error('Failed to update config', e)
+    }
+  }
+
 
   const {
     containerRef,
@@ -233,6 +263,26 @@ export function App() {
             {isDark ? 'Light Mode' : 'Dark Mode'}
           </button>
 
+          <input
+            type="text"
+            value={userName}
+            onChange={(e) => setUserName(e.target.value)}
+            placeholder="User Name"
+            style={{ ...selectStyle(isDark), width: 100 }}
+            title="Name used for audit logs"
+          />
+
+          <button 
+            onClick={() => {
+              setShowAuditLogs(!showAuditLogs)
+              if (!showAuditLogs) fetchAuditLogs()
+            }} 
+            style={btnStyle(isDark, false)}
+          >
+            {showAuditLogs ? 'Hide Logs' : 'Audit Logs'}
+          </button>
+
+
           <div style={{ flex: 1 }} />
 
           {USE_REMOTE_DB && connectionStatus === 'checking' && (
@@ -310,98 +360,68 @@ export function App() {
               {/* Current Mode */}
               <div>
                 <span style={{ color: isDark ? '#6b7280' : '#9ca3af' }}>Mode:</span>{' '}
-                <strong style={{ color: accessHints.isReadOnly ? '#f59e0b' : '#10b981' }}>
-                  {accessHints.mode || 'full'}
-                </strong>
+                <select
+                  value={accessHints.mode || 'full'}
+                  onChange={(e) => updateBackendConfig({ mode: e.target.value })}
+                  style={{ ...selectStyle(isDark), padding: '2px 4px', fontSize: 11, marginLeft: 4 }}
+                >
+                  <option value="no-access">No Access</option>
+                  <option value="read-only">Read-only</option>
+                  <option value="write">Write</option>
+                  <option value="update">Update</option>
+                  <option value="delete">Delete</option>
+                  <option value="full">Full Access</option>
+                </select>
               </div>
 
               {/* Description */}
               {accessHints.description && (
-                <div style={{ color: isDark ? '#9ca3af' : '#6b7280', fontStyle: 'italic' }}>
+                <div style={{ color: isDark ? '#9ca3af' : '#6b7280', fontStyle: 'italic', display: 'flex', alignItems: 'center' }}>
                   {accessHints.description}
                 </div>
               )}
             </div>
 
-            {/* Allowed/Blocked Operations */}
-            <div style={{ display: 'flex', gap: 24, marginTop: 12, flexWrap: 'wrap' }}>
-              <div>
-                <div style={{ fontSize: 11, color: isDark ? '#6b7280' : '#9ca3af', marginBottom: 4, fontWeight: 500 }}>
-                  ✅ Allowed Operations
-                </div>
-                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                  {getAllowedOps(accessHints).map(op => (
-                    <span key={op} style={{
-                      fontSize: 10, padding: '2px 6px', borderRadius: 4,
-                      backgroundColor: isDark ? '#065f46' : '#d1fae5',
-                      color: isDark ? '#6ee7b7' : '#047857',
-                    }}>
-                      {op.replace('_', ' ')}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              {accessHints.disabledOperations && accessHints.disabledOperations.length > 0 && (
-                <div>
-                  <div style={{ fontSize: 11, color: isDark ? '#6b7280' : '#9ca3af', marginBottom: 4, fontWeight: 500 }}>
-                    ❌ Blocked Operations
-                  </div>
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                    {accessHints.disabledOperations.map(op => (
-                      <span key={op} style={{
-                        fontSize: 10, padding: '2px 6px', borderRadius: 4,
-                        backgroundColor: isDark ? '#7f1d1d' : '#fee2e2',
-                        color: isDark ? '#fca5a5' : '#b91c1c',
-                        textDecoration: 'line-through',
-                      }}>
-                        {op.replace('_', ' ')}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
             {/* Guardrail Settings */}
-            <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 11 }}>
-              {accessHints.maxRowsLimit && (
-                <div style={{
-                  padding: '4px 8px', borderRadius: 4,
-                  backgroundColor: isDark ? '#1e3a5f' : '#eff6ff',
-                  color: isDark ? '#60a5fa' : '#2563eb',
-                }}>
-                  📊 Max {accessHints.maxRowsLimit} rows/query
-                </div>
-              )}
-              {accessHints.blockSelectStar && (
-                <div style={{
-                  padding: '4px 8px', borderRadius: 4,
-                  backgroundColor: isDark ? '#7f1d1d' : '#fee2e2',
-                  color: isDark ? '#fca5a5' : '#b91c1c',
-                }}>
-                  🚫 No SELECT *
-                </div>
-              )}
-              {accessHints.requireWhereForModify && (
-                <div style={{
-                  padding: '4px 8px', borderRadius: 4,
-                  backgroundColor: isDark ? '#422006' : '#fffbeb',
-                  color: isDark ? '#fcd34d' : '#92400e',
-                }}>
-                  ⚠️ WHERE required for UPDATE/DELETE
-                </div>
-              )}
-              {accessHints.allowFullTableScan === false && (
-                <div style={{
-                  padding: '4px 8px', borderRadius: 4,
-                  backgroundColor: isDark ? '#7f1d1d' : '#fee2e2',
-                  color: isDark ? '#fca5a5' : '#b91c1c',
-                }}>
-                  🚫 No full table scan
-                </div>
-              )}
+            <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 11, alignItems: 'center' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={accessHints.blockSelectStar}
+                  onChange={(e) => updateBackendConfig({ blockSelectStar: e.target.checked })}
+                />
+                🚫 No SELECT *
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={accessHints.requireWhereForModify}
+                  onChange={(e) => updateBackendConfig({ requireWhereForModify: e.target.checked })}
+                />
+                ⚠️ WHERE required
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={accessHints.allowFullTableScan === false}
+                  onChange={(e) => updateBackendConfig({ allowFullTableScan: !e.target.checked })}
+                />
+                🚫 No full scan
+              </label>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>📊 Max rows:</span>
+                <input
+                  type="number"
+                  value={accessHints.maxRowsLimit || 1000}
+                  onChange={(e) => updateBackendConfig({ maxRowsLimit: parseInt(e.target.value) })}
+                  style={{ ...selectStyle(isDark), padding: '2px 4px', fontSize: 11, width: 60 }}
+                />
+              </div>
             </div>
+
 
             {/* Read-only warning */}
             {isReadOnly && (
@@ -462,6 +482,67 @@ export function App() {
             {statusMessage}
           </div>
         )}
+
+        {/* Audit Logs */}
+        {showAuditLogs && (
+          <div style={{
+            marginTop: 16, padding: 16, borderRadius: 10,
+            border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+            backgroundColor: isDark ? '#111318' : '#fff',
+            maxHeight: 300, overflow: 'auto'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: isDark ? '#9ca3af' : '#6b7280' }}>
+                📋 Audit Logs (Last 100 queries)
+              </h3>
+              <button onClick={fetchAuditLogs} style={{ ...btnStyle(isDark, false), padding: '2px 8px', fontSize: 11 }}>
+                Refresh
+              </button>
+            </div>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ textAlign: 'left', borderBottom: `1px solid ${isDark ? '#1f2937' : '#f3f4f6'}` }}>
+                  <th style={{ padding: '8px 4px' }}>User</th>
+                  <th style={{ padding: '8px 4px' }}>SQL</th>
+                  <th style={{ padding: '8px 4px' }}>Status</th>
+                  <th style={{ padding: '8px 4px' }}>Rows</th>
+                  <th style={{ padding: '8px 4px' }}>Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditLogs.map(log => (
+                  <tr key={log.id} style={{ borderBottom: `1px solid ${isDark ? '#1f2937' : '#f3f4f6'}` }}>
+                    <td style={{ padding: '8px 4px', fontWeight: 500 }}>{log.user}</td>
+                    <td style={{ padding: '8px 4px', fontFamily: 'monospace', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={log.sql}>
+                      {log.sql}
+                    </td>
+                    <td style={{ padding: '8px 4px' }}>
+                      <span style={{
+                        padding: '2px 6px', borderRadius: 4, fontSize: 10,
+                        backgroundColor: log.status === 'success' ? '#065f46' : '#7f1d1d',
+                        color: '#fff'
+                      }}>
+                        {log.status}
+                      </span>
+                    </td>
+                    <td style={{ padding: '8px 4px' }}>{log.resultSize}</td>
+                    <td style={{ padding: '8px 4px', color: isDark ? '#6b7280' : '#9ca3af' }}>
+                      {new Date(log.timestamp).toLocaleTimeString()}
+                    </td>
+                  </tr>
+                ))}
+                {auditLogs.length === 0 && (
+                  <tr>
+                    <td colSpan={5} style={{ padding: 24, textAlign: 'center', color: isDark ? '#4b5563' : '#9ca3af' }}>
+                      No logs found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
 
         {errors.length > 0 && (
           <div style={{
