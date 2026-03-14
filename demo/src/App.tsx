@@ -1,7 +1,13 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useSqlEditor, SqlResults } from '@vsql/react'
-import { configureSqlJsWasm } from '@vsql/core'
-import type { SqlDialect, ThemePreset, AccessControlHints, AccessMode } from '@vsql/core'
+import {
+  configureSqlJsWasm,
+  type SqlDialect,
+  type ThemePreset,
+  type AccessControlHints,
+  type AccessMode,
+  type AccessControlConfig
+} from '@vsql/core'
 import { USE_REMOTE_DB, API_BASE_URL } from './db/config'
 import { remoteDbAdapter } from './db/remoteAdapter'
 
@@ -45,12 +51,22 @@ export function App() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [dataLoaded, setDataLoaded] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(USE_REMOTE_DB ? 'checking' : null)
+  const [activeConnection, setActiveConnection] = useState<string>('default')
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const [accessHints, setAccessHints] = useState<AccessControlHints | null>(null)
   const [showGuardrails, setShowGuardrails] = useState(false)
   const [showAuditLogs, setShowAuditLogs] = useState(false)
   const [auditLogs, setAuditLogs] = useState<any[]>([])
   const [userName, setUserName] = useState(localStorage.getItem('vsql_user') || 'Admin')
+  const [paginationVariant, setPaginationVariant] = useState<'simple' | 'full' | 'compact'>('full')
+  const [pageSize, setPageSize] = useState(10)
+  const [localGuardrails, setLocalGuardrails] = useState<AccessControlConfig>({
+    mode: 'full',
+    maxRowsLimit: 1000,
+    blockSelectStar: false,
+    requireWhereForModify: false,
+    allowFullTableScan: true,
+  })
 
   useEffect(() => {
     localStorage.setItem('vsql_user', userName)
@@ -64,6 +80,10 @@ export function App() {
   }, [])
 
   const updateBackendConfig = async (updates: any) => {
+    if (!USE_REMOTE_DB) {
+      setLocalGuardrails(prev => ({ ...prev, ...updates }))
+      return
+    }
     try {
       await fetch(`${API_BASE_URL.replace(/\/$/, '')}/api/config`, {
         method: 'POST',
@@ -84,6 +104,7 @@ export function App() {
     editor,
     errors,
     results,
+    guardrailResult,
     isRunning,
     run,
     setSql,
@@ -102,11 +123,18 @@ export function App() {
     minHeight: 180,
     maxHeight: 400,
     validateDelay: 300,
+    guardrails: localGuardrails,
   })
 
-  // Fetch access hints from backend
+  // Fetch access hints from backend or local config
   useEffect(() => {
-    if (!USE_REMOTE_DB) return
+    if (!USE_REMOTE_DB) {
+      // For local, generate hints from localGuardrails
+      import('@vsql/core').then(({ generateAccessHints }) => {
+        setAccessHints(generateAccessHints(localGuardrails))
+      })
+      return
+    }
     if (hookAccessHints) {
       setAccessHints(hookAccessHints)
       return
@@ -117,7 +145,7 @@ export function App() {
         if (hints) setAccessHints(hints)
       })
       .catch(() => {})
-  }, [USE_REMOTE_DB, hookAccessHints])
+  }, [USE_REMOTE_DB, hookAccessHints, localGuardrails])
 
   const seedDone = useRef(false)
 
@@ -173,6 +201,26 @@ export function App() {
           INSERT OR IGNORE INTO users VALUES (3, 'Charlie', 'charlie@example.com', 35, 'New York');
           INSERT OR IGNORE INTO users VALUES (4, 'Diana', 'diana@example.com', 28, 'Chicago');
           INSERT OR IGNORE INTO users VALUES (5, 'Eve', 'eve@example.com', 32, 'San Francisco');
+          INSERT OR IGNORE INTO users VALUES (6, 'Frank', 'frank@example.com', 45, 'New York');
+          INSERT OR IGNORE INTO users VALUES (7, 'Grace', 'grace@example.com', 22, 'Chicago');
+          INSERT OR IGNORE INTO users VALUES (8, 'Hank', 'hank@example.com', 38, 'San Francisco');
+          INSERT OR IGNORE INTO users VALUES (9, 'Ivy', 'ivy@example.com', 29, 'New York');
+          INSERT OR IGNORE INTO users VALUES (10, 'Jack', 'jack@example.com', 31, 'Chicago');
+          INSERT OR IGNORE INTO users VALUES (11, 'Kelly', 'kelly@example.com', 27, 'San Francisco');
+          INSERT OR IGNORE INTO users VALUES (12, 'Leo', 'leo@example.com', 40, 'New York');
+          INSERT OR IGNORE INTO users VALUES (13, 'Mona', 'mona@example.com', 33, 'Chicago');
+          INSERT OR IGNORE INTO users VALUES (14, 'Nate', 'nate@example.com', 26, 'San Francisco');
+          INSERT OR IGNORE INTO users VALUES (15, 'Olive', 'olive@example.com', 34, 'New York');
+          INSERT OR IGNORE INTO users VALUES (16, 'Paul', 'paul@example.com', 36, 'Chicago');
+          INSERT OR IGNORE INTO users VALUES (17, 'Quinn', 'quinn@example.com', 24, 'San Francisco');
+          INSERT OR IGNORE INTO users VALUES (18, 'Rose', 'rose@example.com', 39, 'New York');
+          INSERT OR IGNORE INTO users VALUES (19, 'Sam', 'sam@example.com', 41, 'Chicago');
+          INSERT OR IGNORE INTO users VALUES (20, 'Tina', 'tina@example.com', 23, 'San Francisco');
+          INSERT OR IGNORE INTO users VALUES (21, 'Uma', 'uma@example.com', 30, 'New York');
+          INSERT OR IGNORE INTO users VALUES (22, 'Victor', 'victor@example.com', 28, 'Chicago');
+          INSERT OR IGNORE INTO users VALUES (23, 'Wendy', 'wendy@example.com', 32, 'San Francisco');
+          INSERT OR IGNORE INTO users VALUES (24, 'Xander', 'xander@example.com', 35, 'New York');
+          INSERT OR IGNORE INTO users VALUES (25, 'Yara', 'yara@example.com', 29, 'Chicago');
         `)
         await editor.execRaw(`
           INSERT OR IGNORE INTO orders VALUES (1, 1, 'Laptop', 999.99, 'completed');
@@ -199,17 +247,33 @@ export function App() {
     })()
   }, [editor])
 
-  const handleRun = useCallback(async () => {
+  const handleRun = useCallback(async (page = 0, size = pageSize) => {
     setStatusMessage(null)
     try {
-      const result = await run()
+      const result = await run({ page, pageSize: size })
       if (!result) {
         setStatusMessage('Query returned no data.')
       }
     } catch (e: any) {
       setStatusMessage('Execution error: ' + (e?.message || String(e)))
     }
-  }, [run])
+  }, [run, pageSize])
+
+  const handlePageChange = (page: number, size: number) => {
+    setPageSize(size)
+    handleRun(page, size)
+  }
+
+  // Handle connection change
+  useEffect(() => {
+    if (activeConnection === 'session-2') {
+      updateBackendConfig({ mode: 'read-only', blockSelectStar: true })
+    } else if (activeConnection === 'user-123') {
+      updateBackendConfig({ mode: 'no-access' })
+    } else {
+      updateBackendConfig({ mode: 'full', blockSelectStar: false, requireWhereForModify: false, allowFullTableScan: true })
+    }
+  }, [activeConnection])
 
   const handleDialectChange = (d: SqlDialect) => {
     setDialect(d)
@@ -263,6 +327,18 @@ export function App() {
             {isDark ? 'Light Mode' : 'Dark Mode'}
           </button>
 
+          <select
+            value={activeConnection}
+            onChange={(e) => setActiveConnection(e.target.value)}
+            style={selectStyle(isDark)}
+            title="Active Connection"
+          >
+            <option value="default">Default Connection</option>
+            <option value="session-1">Session 1 (Dev)</option>
+            <option value="session-2">Session 2 (Prod-Read)</option>
+            <option value="user-123">User 123 (Restricted)</option>
+          </select>
+
           <input
             type="text"
             value={userName}
@@ -282,6 +358,17 @@ export function App() {
             {showAuditLogs ? 'Hide Logs' : 'Audit Logs'}
           </button>
 
+
+          <select
+            value={paginationVariant}
+            onChange={(e) => setPaginationVariant(e.target.value as any)}
+            style={selectStyle(isDark)}
+            title="Pagination UI Style"
+          >
+            <option value="full">Full Pagination</option>
+            <option value="simple">Simple Pagination</option>
+            <option value="compact">Compact Pagination</option>
+          </select>
 
           <div style={{ flex: 1 }} />
 
@@ -309,14 +396,18 @@ export function App() {
           )}
 
           <button
-            onClick={handleRun}
-            disabled={isRunning || !dataLoaded || isReadOnly}
+            onClick={() => handleRun()}
+            disabled={isRunning || !dataLoaded || isReadOnly || (guardrailResult && !guardrailResult.allowed)}
             style={{
               ...btnStyle(isDark, true),
-              opacity: (isRunning || !dataLoaded || isReadOnly) ? 0.6 : 1,
+              opacity: (isRunning || !dataLoaded || isReadOnly || (guardrailResult && !guardrailResult.allowed)) ? 0.6 : 1,
               minWidth: 120,
+              backgroundColor: (guardrailResult && !guardrailResult.allowed) ? '#ef4444' : '#2563eb',
             }}
-            title={isReadOnly ? 'Read-only mode - cannot execute queries' : ''}
+            title={
+              isReadOnly ? 'Read-only mode - cannot execute queries' : 
+              (guardrailResult && !guardrailResult.allowed) ? `Access Denied: ${guardrailResult.reason}` : ''
+            }
           >
             {isRunning ? 'Running...' : 'Run Query'}
           </button>
@@ -356,31 +447,52 @@ export function App() {
               </button>
             </div>
             
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 12 }}>
-              {/* Current Mode */}
-              <div>
-                <span style={{ color: isDark ? '#6b7280' : '#9ca3af' }}>Mode:</span>{' '}
-                <select
-                  value={accessHints.mode || 'full'}
-                  onChange={(e) => updateBackendConfig({ mode: e.target.value })}
-                  style={{ ...selectStyle(isDark), padding: '2px 4px', fontSize: 11, marginLeft: 4 }}
-                >
-                  <option value="no-access">No Access</option>
-                  <option value="read-only">Read-only</option>
-                  <option value="write">Write</option>
-                  <option value="update">Update</option>
-                  <option value="delete">Delete</option>
-                  <option value="full">Full Access</option>
-                </select>
-              </div>
-
-              {/* Description */}
-              {accessHints.description && (
-                <div style={{ color: isDark ? '#9ca3af' : '#6b7280', fontStyle: 'italic', display: 'flex', alignItems: 'center' }}>
-                  {accessHints.description}
-                </div>
-              )}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 12 }}>
+            {/* Current Mode */}
+            <div>
+              <span style={{ color: isDark ? '#6b7280' : '#9ca3af' }}>Mode:</span>{' '}
+              <select
+                value={accessHints.mode || 'full'}
+                onChange={(e) => updateBackendConfig({ mode: e.target.value })}
+                style={{ ...selectStyle(isDark), padding: '2px 4px', fontSize: 11, marginLeft: 4 }}
+              >
+                <option value="no-access">No Access</option>
+                <option value="read-only">Read-only</option>
+                <option value="write">Write</option>
+                <option value="update">Update</option>
+                <option value="delete">Delete</option>
+                <option value="full">Full Access</option>
+              </select>
             </div>
+
+            {/* Allowed Actions */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ color: isDark ? '#6b7280' : '#9ca3af' }}>Allowed Actions:</span>
+              <div style={{ display: 'flex', gap: 4 }}>
+                {['select', 'insert', 'update', 'delete', 'ddl_write'].map(op => {
+                  const isAllowed = getAllowedOps(accessHints).includes(op)
+                  return (
+                    <span key={op} style={{
+                      padding: '2px 6px', borderRadius: 4, fontSize: 10,
+                      backgroundColor: isAllowed ? (isDark ? '#064e3b' : '#d1fae5') : (isDark ? '#450a0a' : '#fee2e2'),
+                      color: isAllowed ? (isDark ? '#34d399' : '#065f46') : (isDark ? '#f87171' : '#991b1b'),
+                      border: `1px solid ${isAllowed ? (isDark ? '#065f46' : '#6ee7b7') : (isDark ? '#7f1d1d' : '#fecaca')}`,
+                      textTransform: 'capitalize'
+                    }}>
+                      {op.replace('ddl_', '')}
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Description */}
+            {accessHints.description && (
+              <div style={{ color: isDark ? '#9ca3af' : '#6b7280', fontStyle: 'italic', display: 'flex', alignItems: 'center' }}>
+                {accessHints.description}
+              </div>
+            )}
+          </div>
 
             {/* Guardrail Settings */}
             <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 11, alignItems: 'center' }}>
@@ -472,6 +584,17 @@ export function App() {
         </div>
 
         {/* Status / errors */}
+        {guardrailResult && !guardrailResult.allowed && (
+          <div style={{
+            marginTop: 12, padding: '8px 14px', borderRadius: 8, fontSize: 13,
+            backgroundColor: isDark ? '#422006' : '#fffbeb',
+            color: isDark ? '#fcd34d' : '#92400e',
+            border: `1px solid ${isDark ? '#b45309' : '#fcd34d'}`,
+          }}>
+            🚫 <strong>Security Policy:</strong> {guardrailResult.reason} (Category: {guardrailResult.category})
+          </div>
+        )}
+
         {statusMessage && (
           <div style={{
             marginTop: 12, padding: '8px 14px', borderRadius: 8, fontSize: 13,
@@ -574,12 +697,16 @@ export function App() {
             showRowCount
             showElapsed
             emptyMessage="Click 'Run Query' to see results"
+            onPageChange={handlePageChange}
+            paginationVariant={paginationVariant}
             style={{
               ...(isDark ? {
                 '--vsql-border': '#1f2937', '--vsql-muted': '#6b7280',
                 '--vsql-badge-bg': '#1e3a5f', '--vsql-badge-fg': '#60a5fa',
                 '--vsql-th-bg': '#151921', '--vsql-th-fg': '#9ca3af',
                 '--vsql-row-alt': '#0d0f14',
+                '--vsql-bg': '#111318', '--vsql-fg': '#e4e5e7',
+                '--vsql-primary': '#2563eb',
               } as any : {}),
             }}
           />

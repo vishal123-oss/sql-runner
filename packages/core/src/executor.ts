@@ -58,7 +58,7 @@ export class LocalExecutor implements DatabaseAdapter {
     return this.initPromise
   }
 
-  async execute(sql: string): Promise<QueryResult> {
+  async execute(sql: string, options?: { page?: number; pageSize?: number }): Promise<QueryResult> {
     await this.init()
     const start = performance.now()
 
@@ -67,13 +67,36 @@ export class LocalExecutor implements DatabaseAdapter {
       const isSelect = /^\s*(SELECT|PRAGMA|EXPLAIN|WITH)\b/i.test(trimmed)
 
       if (isSelect) {
-        const stmt = this.db.prepare(trimmed)
+        let finalSql = trimmed
+        const { page, pageSize } = options || {}
+
+        if (pageSize != null && page != null) {
+          // Add LIMIT and OFFSET for pagination (SQLite style)
+          finalSql = `${trimmed} LIMIT ${pageSize} OFFSET ${page * pageSize}`
+        }
+
+        const stmt = this.db.prepare(finalSql)
         const colNames: string[] = stmt.getColumnNames()
         const rawRows: any[][] = []
         while (stmt.step()) {
           rawRows.push(stmt.get())
         }
         stmt.free()
+
+        // Get total count if paginated
+        let totalCount = rawRows.length
+        if (pageSize != null && page != null) {
+          try {
+            // Very simple way to get count, might not work for all queries but good for demo
+            const countSql = `SELECT COUNT(*) FROM (${trimmed})`
+            const countRes = this.db.exec(countSql)
+            if (countRes.length > 0 && countRes[0].values.length > 0) {
+              totalCount = countRes[0].values[0][0]
+            }
+          } catch (e) {
+            console.warn('Failed to get total count for pagination', e)
+          }
+        }
 
         const elapsed = Math.round(performance.now() - start)
         const columns: QueryResultColumn[] = colNames.map((name) => ({ name }))
@@ -83,7 +106,16 @@ export class LocalExecutor implements DatabaseAdapter {
           return obj
         })
 
-        return { columns, rows, rowCount: rows.length, elapsed, sql }
+        return {
+          columns,
+          rows,
+          rowCount: rows.length,
+          totalCount,
+          page,
+          pageSize,
+          elapsed,
+          sql: finalSql
+        }
       }
 
       this.db.exec(trimmed)
@@ -94,7 +126,7 @@ export class LocalExecutor implements DatabaseAdapter {
         rows: [],
         rowCount: 0,
         elapsed,
-        sql,
+        sql: trimmed,
       }
     } catch (e: any) {
       throw new Error(e.message || String(e))
@@ -156,11 +188,11 @@ export class LocalExecutor implements DatabaseAdapter {
 export class AdapterExecutor {
   constructor(private adapter: DatabaseAdapter) {}
 
-  async execute(sql: string): Promise<QueryResult> {
+  async execute(sql: string, options?: { page?: number; pageSize?: number }): Promise<QueryResult> {
     const start = performance.now()
-    const result = await this.adapter.execute(sql)
+    const result = await this.adapter.execute(sql, options)
     result.elapsed = result.elapsed ?? Math.round(performance.now() - start)
-    result.sql = sql
+    result.sql = result.sql ?? sql
     return result
   }
 
@@ -223,7 +255,7 @@ export class AccessControlledExecutor {
     return generateAccessHints(this.config)
   }
 
-  async execute(sql: string): Promise<QueryResult> {
+  async execute(sql: string, options?: { page?: number; pageSize?: number }): Promise<QueryResult> {
     // Validate against config (enforcement for local, advisory for remote)
     const validation = validateAccessControl(sql, this.config)
     if (!validation.allowed) {
@@ -234,9 +266,9 @@ export class AccessControlledExecutor {
     }
 
     const start = performance.now()
-    const result = await this.adapter.execute(sql)
+    const result = await this.adapter.execute(sql, options)
     result.elapsed = result.elapsed ?? Math.round(performance.now() - start)
-    result.sql = sql
+    result.sql = result.sql ?? sql
     return result
   }
 
@@ -267,7 +299,7 @@ export function createAccessControlledAdapter(
 ): DatabaseAdapter {
   const controlled = new AccessControlledExecutor(adapter, options)
   return {
-    execute: (sql) => controlled.execute(sql),
+    execute: (sql, opts) => controlled.execute(sql, opts),
     getSchema: () => controlled.getSchema(),
     destroy: () => controlled.destroy(),
     getAccessHints: () => controlled.getAccessHints(),

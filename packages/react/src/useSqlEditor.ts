@@ -1,6 +1,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
 import {
   createSqlEditor,
+  validateAccessControl,
   type SqlEditorConfig,
   type SqlEditorInstance,
   type QueryResult,
@@ -11,6 +12,8 @@ import {
   type ThemeConfig,
   type AccessControlHints,
   type AccessMode,
+  type AccessControlResult,
+  type AccessControlConfig,
 } from '@vsql/core'
 
 export interface UseSqlEditorOptions {
@@ -42,10 +45,12 @@ export interface UseSqlEditorReturn {
   errors: ValidationError[]
   /** Last query result */
   results: QueryResult | null
+  /** Current query validation result against guardrails */
+  guardrailResult: AccessControlResult | null
   /** Whether a query is currently executing */
   isRunning: boolean
   /** Execute the current query */
-  run: () => Promise<QueryResult | undefined>
+  run: (options?: { page?: number; pageSize?: number }) => Promise<QueryResult | undefined>
   /** Set the SQL content */
   setSql: (value: string) => void
   /** Update schema dynamically */
@@ -68,6 +73,7 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
   const [sql, setSqlState] = useState(options.value ?? '')
   const [errors, setErrors] = useState<ValidationError[]>([])
   const [results, setResults] = useState<QueryResult | null>(null)
+  const [guardrailResult, setGuardrailResult] = useState<AccessControlResult | null>(null)
   const [isRunning, setIsRunning] = useState(false)
   const [editorInstance, setEditorInstance] = useState<SqlEditorInstance | null>(null)
   const [accessHints, setAccessHints] = useState<AccessControlHints | null>(options.accessHints ?? null)
@@ -128,6 +134,17 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
       onChange: (value) => {
         setSqlState(value)
         optionsRef.current.onChange?.(value)
+        
+        // Real-time guardrail validation
+        if (optionsRef.current.guardrails) {
+          try {
+            const res = validateAccessControl(value, optionsRef.current.guardrails)
+            setGuardrailResult(res)
+          } catch (e) {
+            // If SQL is invalid, we might not be able to classify it yet
+            setGuardrailResult(null)
+          }
+        }
       },
       onValidate: (errs) => {
         setErrors(errs)
@@ -150,11 +167,11 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
     }
   }, [])
 
-  const run = useCallback(async () => {
+  const run = useCallback(async (options?: { page?: number; pageSize?: number }) => {
     if (!editorRef.current) return undefined
     setIsRunning(true)
     try {
-      const result = await editorRef.current.run()
+      const result = await (editorRef.current as any).run(options)
       setResults(result ?? null)
       return result
     } catch (err) {
@@ -191,6 +208,7 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
     sql,
     errors,
     results,
+    guardrailResult,
     isRunning,
     run,
     setSql,

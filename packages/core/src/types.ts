@@ -45,6 +45,12 @@ export interface QueryResult {
   columns: QueryResultColumn[]
   rows: Record<string, unknown>[]
   rowCount: number
+  /** Total number of rows available (for pagination) */
+  totalCount?: number
+  /** Current page (0-based) */
+  page?: number
+  /** Rows per page */
+  pageSize?: number
   /** Elapsed time in milliseconds */
   elapsed?: number
   /** The SQL statement that produced this result */
@@ -153,7 +159,7 @@ export interface AccessControlResult {
 
 export interface DatabaseAdapter {
   /** Execute a SQL statement and return the result. */
-  execute(sql: string): Promise<QueryResult>
+  execute(sql: string, options?: { page?: number; pageSize?: number }): Promise<QueryResult>
   /** Optional: return the schema for autocomplete. */
   getSchema?(): Promise<SchemaDefinition>
   /** Optional: cleanup. */
