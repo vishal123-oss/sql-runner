@@ -90,6 +90,7 @@ export type SqlOperationCategory =
  * Access control mode - predefined permission sets.
  */
 export type AccessMode =
+  | 'no-access'   // Block ALL operations
   | 'read-only'   // SELECT, WITH, PRAGMA, SHOW, DESCRIBE, EXPLAIN only
   | 'write'       // Above + INSERT, CREATE TABLE, COPY
   | 'update'      // Above + UPDATE
@@ -142,7 +143,7 @@ export interface DatabaseAdapter {
   /** Optional: cleanup. */
   destroy?(): void
   /** Optional: access control hints for UI (not for security - backend enforces). */
-  getAccessHints?(): AccessControlHints | null
+  getAccessHints?(): Promise<AccessControlHints | null>
 }
 
 // ---------------------------------------------------------------------------

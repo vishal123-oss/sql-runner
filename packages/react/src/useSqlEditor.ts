@@ -27,6 +27,8 @@ export interface UseSqlEditorOptions {
   onChange?: (value: string) => void
   /** Access control hints from backend (for UI only, not security) */
   accessHints?: AccessControlHints
+  /** Local guardrails config to enforce in the editor */
+  guardrails?: AccessControlConfig
 }
 
 export interface UseSqlEditorReturn {
@@ -58,6 +60,8 @@ export interface UseSqlEditorReturn {
   isReadOnly: boolean
   /** Access mode label for display (e.g., "Read-only", "Write", "Full") */
   accessModeLabel: string
+  /** Refresh access hints from the executor */
+  refreshAccessHints: () => Promise<void>
 }
 
 export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorReturn {
@@ -73,21 +77,27 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
   const optionsRef = useRef(options)
   optionsRef.current = options
 
+  const refreshAccessHints = useCallback(async () => {
+    const executor = optionsRef.current.executor
+    if (executor && typeof executor === 'object' && 'getAccessHints' in executor) {
+      const adapter = executor as { getAccessHints?: () => Promise<AccessControlHints | null> }
+      try {
+        const hints = await adapter.getAccessHints?.()
+        if (hints) setAccessHints(hints)
+      } catch (e) {
+        console.error('Failed to fetch access hints:', e)
+      }
+    }
+  }, [])
+
   // Fetch access hints from adapter if available
   useEffect(() => {
-    const hints = options.accessHints
-    if (hints) {
-      setAccessHints(hints)
+    if (options.accessHints) {
+      setAccessHints(options.accessHints)
       return
     }
-    // Try to get hints from executor if it's an adapter with getAccessHints
-    const executor = options.executor
-    if (executor && typeof executor === 'object' && 'getAccessHints' in executor) {
-      const adapter = executor as { getAccessHints?: () => AccessControlHints | null }
-      const hintsFromAdapter = adapter.getAccessHints?.()
-      if (hintsFromAdapter) setAccessHints(hintsFromAdapter)
-    }
-  }, [options.accessHints, options.executor])
+    refreshAccessHints()
+  }, [options.accessHints, refreshAccessHints])
 
   const containerRef = useCallback((el: HTMLDivElement | null) => {
     if (containerElRef.current === el) return
@@ -114,6 +124,7 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
       maxHeight: opts.maxHeight,
       executor: opts.executor,
       validateDelay: opts.validateDelay,
+      guardrails: opts.guardrails,
       onChange: (value) => {
         setSqlState(value)
         optionsRef.current.onChange?.(value)
@@ -126,7 +137,7 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
       },
       onError: () => {
       },
-    })
+    } as any) // Cast as any because createSqlEditor now takes SqlEditorConfigWithGuardrails
 
     editorRef.current = instance
     setEditorInstance(instance)
@@ -189,6 +200,7 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
     accessHints,
     isReadOnly,
     accessModeLabel,
+    refreshAccessHints,
   }
 }
 

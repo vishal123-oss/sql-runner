@@ -4,6 +4,7 @@ import {
   useImperativeHandle,
   useRef,
   useMemo,
+  useState,
 } from 'react'
 import {
   createSqlEditor,
@@ -59,6 +60,8 @@ export interface SqlEditorProps {
   accessHints?: AccessControlHints
   /** Show access mode badge in corner (default: true if accessHints provided) */
   showAccessBadge?: boolean
+  /** Local guardrails config to enforce in the editor */
+  guardrails?: AccessControlConfig
 }
 
 export interface SqlEditorRef {
@@ -97,6 +100,7 @@ export const SqlEditor = forwardRef<SqlEditorRef, SqlEditorProps>(
       onRun,
       accessHints,
       showAccessBadge,
+      guardrails,
     } = props
 
     // Derive effective read-only from prop or accessHints
@@ -125,6 +129,7 @@ export const SqlEditor = forwardRef<SqlEditorRef, SqlEditorProps>(
         maxHeight,
         executor,
         validateDelay,
+        guardrails,
         onChange: (val) => callbacksRef.current.onChange?.(val),
         onValidate: (errs) => callbacksRef.current.onValidate?.(errs),
         onExecute: (sql, result) => {
@@ -141,7 +146,7 @@ export const SqlEditor = forwardRef<SqlEditorRef, SqlEditorProps>(
             preventDefault: true,
           },
         ],
-      })
+      } as any)
 
       editorRef.current = instance
 
@@ -224,15 +229,21 @@ export const SqlEditor = forwardRef<SqlEditorRef, SqlEditorProps>(
       color: accessHints?.isReadOnly ? '#92400e' : '#3730a3',
       border: `1px solid ${accessHints?.isReadOnly ? '#fcd34d' : '#c7d2fe'}`,
       zIndex: 10,
+      cursor: 'help',
     }
 
     const badgeLabel = accessHints?.mode
-      ? accessHints.mode === 'read-only' ? 'Read-only'
+      ? accessHints.mode === 'no-access' ? 'No Access'
+        : accessHints.mode === 'read-only' ? 'Read-only'
         : accessHints.mode === 'write' ? 'Write'
         : accessHints.mode === 'update' ? 'Update'
         : accessHints.mode === 'delete' ? 'Delete'
         : 'Full'
       : null
+
+    const isNoAccess = accessHints?.mode === 'no-access'
+
+    const [showPermissions, setShowPermissions] = useState(true)
 
     return (
       <div
@@ -241,11 +252,93 @@ export const SqlEditor = forwardRef<SqlEditorRef, SqlEditorProps>(
         style={{ ...wrapperStyle, position: 'relative' }}
       >
         {shouldShowBadge && badgeLabel && (
-          <div style={badgeStyle} title={accessHints?.description ?? 'Access mode'}>
+          <div 
+            style={badgeStyle} 
+            title="Click to see permissions"
+            onClick={() => setShowPermissions(!showPermissions)}
+          >
             {badgeLabel}
+          </div>
+        )}
+        {showPermissions && accessHints && (
+          <div style={{
+            position: 'absolute',
+            top: 36,
+            right: 8,
+            backgroundColor: 'white',
+            border: '1px solid #e5e7eb',
+            borderRadius: 6,
+            padding: 12,
+            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+            zIndex: 20,
+            fontSize: 12,
+            minWidth: 200,
+            color: '#374151',
+          }}>
+            <div style={{ fontWeight: 600, marginBottom: 8, borderBottom: '1px solid #f3f4f6', paddingBottom: 4 }}>
+              Permissions: {badgeLabel}
+            </div>
+            <div style={{ marginBottom: 8, fontStyle: 'italic', fontSize: 11 }}>
+              {accessHints.description}
+            </div>
+            <div>
+              <div style={{ fontWeight: 500, fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Allowed Actions:</div>
+              <ul style={{ margin: 0, paddingLeft: 16, listStyleType: 'disc' }}>
+                {getAllowedOps(accessHints).map(op => (
+                  <li key={op} style={{ textTransform: 'capitalize' }}>{op.replace('_', ' ')}</li>
+                ))}
+              </ul>
+            </div>
+            {accessHints.disabledOperations && accessHints.disabledOperations.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontWeight: 500, fontSize: 11, color: '#991b1b', marginBottom: 4 }}>Blocked Actions:</div>
+                <ul style={{ margin: 0, paddingLeft: 16, listStyleType: 'disc', color: '#991b1b' }}>
+                  {accessHints.disabledOperations.map(op => (
+                    <li key={op} style={{ textTransform: 'capitalize' }}>{op.replace('_', ' ')}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <button 
+              onClick={() => setShowPermissions(false)}
+              style={{
+                marginTop: 12,
+                width: '100%',
+                padding: '4px 0',
+                backgroundColor: '#f3f4f6',
+                border: 'none',
+                borderRadius: 4,
+                cursor: 'pointer',
+                fontSize: 11,
+              }}
+            >
+              Close
+            </button>
+          </div>
+        )}
+        {isNoAccess && (
+          <div style={{
+            position: 'absolute',
+            inset: 0,
+            backgroundColor: 'rgba(255, 255, 255, 0.7)',
+            backdropFilter: 'blur(1px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 5,
+            color: '#991b1b',
+            fontWeight: 500,
+          }}>
+            {accessHints?.description || 'Access restricted'}
           </div>
         )}
       </div>
     )
   },
 )
+
+function getAllowedOps(hints: AccessControlHints): string[] {
+  const allOps: string[] = ['select', 'insert', 'update', 'delete', 'ddl_read', 'ddl_write', 'dcl', 'transaction', 'admin']
+  const disabled = hints.disabledOperations || []
+  return allOps.filter(op => !disabled.includes(op as any))
+}

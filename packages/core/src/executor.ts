@@ -216,9 +216,9 @@ export class AccessControlledExecutor {
   /**
    * Get current access control hints for UI display.
    */
-  getAccessHints(): AccessControlHints | null {
+  async getAccessHints(): Promise<AccessControlHints | null> {
     // Prefer adapter's own hints if available, else generate from config
-    const adapterHints = this.adapter.getAccessHints?.()
+    const adapterHints = await this.adapter.getAccessHints?.()
     if (adapterHints) return adapterHints
     return generateAccessHints(this.config)
   }

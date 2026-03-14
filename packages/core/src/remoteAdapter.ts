@@ -112,13 +112,9 @@ export function createRemoteAdapter(config: RemoteExecutorConfig): DatabaseAdapt
     },
   }
 
-  // If access control is configured (config or hints), wrap with access control
-  if (providedConfig || providedHints) {
-    return createAccessControlledAdapter(baseAdapter, {
-      config: providedConfig,
-      hints: providedHints,
-    })
-  }
-
-  return baseAdapter
+  // Always wrap with access control to support async hint fetching and local enforcement
+  return createAccessControlledAdapter(baseAdapter, {
+    config: providedConfig,
+    hints: providedHints,
+  })
 }

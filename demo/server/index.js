@@ -36,7 +36,7 @@ app.use(express.json())
 // You can also use blockedPatterns to block specific dangerous SQL.
 const ACCESS_CONTROL_CONFIG = {
   // Change this to set the access level:
-  mode: process.env.ACCESS_MODE || 'read-only', // 'read-only' | 'write' | 'update' | 'delete' | 'full'
+  mode: process.env.ACCESS_MODE || 'read-only', // 'no-access' | 'read-only' | 'write' | 'update' | 'delete' | 'full'
   
   // Additional blocked operations (overrides mode defaults)
   blockedOperations: [],
@@ -58,21 +58,8 @@ const ACCESS_CONTROL_CONFIG = {
   allowTransactions: true,
 }
 
-// SQL operation patterns for classification (must match frontend)
-const OPERATION_PATTERNS = [
-  { pattern: /^\s*(DROP)\s+(TABLE|VIEW|INDEX|DATABASE|SCHEMA)\b/i, category: 'ddl_write' },
-  { pattern: /^\s*(ALTER)\s+(TABLE|VIEW|INDEX|DATABASE|SCHEMA)\b/i, category: 'ddl_write' },
-  { pattern: /^\s*(CREATE)\s+(TABLE|VIEW|INDEX|DATABASE|SCHEMA)\b/i, category: 'ddl_write' },
-  { pattern: /^\s*(TRUNCATE)\s+(TABLE)?\b/i, category: 'delete' },
-  { pattern: /^\s*(GRANT|REVOKE)\b/i, category: 'dcl' },
-  { pattern: /^\s*(DELETE)\s+(FROM)?\b/i, category: 'delete' },
-  { pattern: /^\s*(UPDATE)\b/i, category: 'update' },
-  { pattern: /^\s*(INSERT)\s+(INTO)?\b/i, category: 'insert' },
-  { pattern: /^\s*(SELECT|WITH|PRAGMA|VALUES)\b/i, category: 'select' },
-  { pattern: /^\s*(DESCRIBE|DESC|EXPLAIN|SHOW)\b/i, category: 'ddl_read' },
-]
-
 const MODE_DEFAULTS = {
+  'no-access': [],
   'read-only': ['select', 'ddl_read'],
   'write': ['select', 'ddl_read', 'insert'],
   'update': ['select', 'ddl_read', 'insert', 'update'],
@@ -80,62 +67,24 @@ const MODE_DEFAULTS = {
   'full': ['select', 'ddl_read', 'insert', 'update', 'delete', 'ddl_write', 'dcl', 'transaction', 'admin'],
 }
 
-function classifyOperation(sql) {
-  const cleaned = sql.trim().replace(/^(?:\s*--[^\n]*\n|\s*\/\*[\s\S]*?\*\/\s*)*/g, '').trim()
-  for (const { pattern, category } of OPERATION_PATTERNS) {
-    if (pattern.test(cleaned)) return category
-  }
-  return 'unknown'
-}
-
-/**
- * Validate SQL against backend access control config.
- * THIS IS THE REAL SECURITY ENFORCEMENT - never skip this.
- */
-function validateAccessControl(sql) {
-  const cfg = ACCESS_CONTROL_CONFIG
-  const mode = cfg.mode || 'full'
-  const category = classifyOperation(sql)
-  
-  let allowed = new Set(MODE_DEFAULTS[mode] || MODE_DEFAULTS.full)
-  if (cfg.allowedOperations?.length) cfg.allowedOperations.forEach(op => allowed.add(op))
-  if (cfg.blockedOperations?.length) cfg.blockedOperations.forEach(op => allowed.delete(op))
-  
-  if (!allowed.has(category)) {
-    return { allowed: false, reason: `Operation '${category}' not allowed in '${mode}' mode`, category, mode }
-  }
-  
-  if (cfg.blockedPatterns?.length) {
-    for (const pattern of cfg.blockedPatterns) {
-      try { if (new RegExp(pattern, 'i').test(sql)) {
-        return { allowed: false, reason: `Matches blocked pattern: ${pattern}`, category, mode }
-      }} catch {}
-    }
-  }
-  
-  if (cfg.allowMultiStatement === false && sql.split(';').filter(s => s.trim()).length > 1) {
-    return { allowed: false, reason: 'Multi-statement queries not allowed', category, mode }
-  }
-  
-  return { allowed: true, category, mode }
-}
-
-/**
- * Get sanitized hints for client (UX only, not security).
- * Client uses this for badges/UI, but backend ALWAYS validates.
- */
 function getAccessHints() {
   const cfg = ACCESS_CONTROL_CONFIG
   const mode = cfg.mode || 'full'
-  const isReadOnly = mode === 'read-only'
+  const isReadOnly = mode === 'read-only' || mode === 'no-access'
   
+  let description = `Access mode: ${mode}`
+  if (mode === 'no-access') description = 'Access denied: You do not have permission to access this database'
+  else if (mode === 'read-only') description = 'Read-only mode: only SELECT and introspection queries allowed'
+
   return {
     mode,
-    description: `Access mode: ${mode}`,
+    description,
     isReadOnly,
-    disabledOperations: isReadOnly 
-      ? ['insert', 'update', 'delete', 'ddl_write', 'dcl', 'transaction', 'admin']
-      : cfg.blockedOperations,
+    disabledOperations: mode === 'no-access'
+      ? ['select', 'insert', 'update', 'delete', 'ddl_read', 'ddl_write', 'dcl', 'transaction', 'admin']
+      : isReadOnly 
+        ? ['insert', 'update', 'delete', 'ddl_write', 'dcl', 'transaction', 'admin']
+        : cfg.blockedOperations,
   }
 }
 // ============================================================================
