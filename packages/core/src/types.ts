@@ -108,6 +108,14 @@ export interface AccessControlConfig {
   maxRowsLimit?: number
   allowMultiStatement?: boolean
   allowTransactions?: boolean
+  /** Require WHERE clause for UPDATE/DELETE (prevent full table scan) */
+  requireWhereForModify?: boolean
+  /** Maximum query execution time in ms */
+  maxExecutionTimeMs?: number
+  /** Block SELECT * queries */
+  blockSelectStar?: boolean
+  /** Allow full table scans */
+  allowFullTableScan?: boolean
 }
 
 /**
@@ -119,6 +127,14 @@ export interface AccessControlHints {
   disabledOperations?: SqlOperationCategory[]
   description?: string
   isReadOnly?: boolean
+  /** Max rows returned per query */
+  maxRowsLimit?: number
+  /** Require WHERE for modifications */
+  requireWhereForModify?: boolean
+  /** Block SELECT * */
+  blockSelectStar?: boolean
+  /** Allow full table scans */
+  allowFullTableScan?: boolean
 }
 
 /**

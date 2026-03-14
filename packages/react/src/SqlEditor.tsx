@@ -260,7 +260,7 @@ export const SqlEditor = forwardRef<SqlEditorRef, SqlEditorProps>(
             {badgeLabel}
           </div>
         )}
-        {showPermissions && accessHints && (
+        {(
           <div style={{
             position: 'absolute',
             top: 36,

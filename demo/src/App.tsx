@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useSqlEditor, SqlResults } from '@vsql/react'
 import { configureSqlJsWasm } from '@vsql/core'
-import type { SqlDialect, ThemePreset } from '@vsql/core'
+import type { SqlDialect, ThemePreset, AccessControlHints, AccessMode } from '@vsql/core'
 import { USE_REMOTE_DB, API_BASE_URL } from './db/config'
 import { remoteDbAdapter } from './db/remoteAdapter'
 
@@ -46,6 +46,8 @@ export function App() {
   const [dataLoaded, setDataLoaded] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(USE_REMOTE_DB ? 'checking' : null)
   const [connectionError, setConnectionError] = useState<string | null>(null)
+  const [accessHints, setAccessHints] = useState<AccessControlHints | null>(null)
+  const [showGuardrails, setShowGuardrails] = useState(true)
 
   const {
     containerRef,
@@ -57,6 +59,9 @@ export function App() {
     setSql,
     setDialect: changeDialect,
     setTheme: changeTheme,
+    accessHints: hookAccessHints,
+    isReadOnly,
+    accessModeLabel,
   } = useSqlEditor({
     dialect,
     schema: SAMPLE_SCHEMA,
@@ -68,6 +73,21 @@ export function App() {
     maxHeight: 400,
     validateDelay: 300,
   })
+
+  // Fetch access hints from backend
+  useEffect(() => {
+    if (!USE_REMOTE_DB) return
+    if (hookAccessHints) {
+      setAccessHints(hookAccessHints)
+      return
+    }
+    // Fetch from adapter
+    remoteDbAdapter.getAccessHints?.()
+      .then(hints => {
+        if (hints) setAccessHints(hints)
+      })
+      .catch(() => {})
+  }, [USE_REMOTE_DB, hookAccessHints])
 
   const seedDone = useRef(false)
 
@@ -240,16 +260,163 @@ export function App() {
 
           <button
             onClick={handleRun}
-            disabled={isRunning || !dataLoaded}
+            disabled={isRunning || !dataLoaded || isReadOnly}
             style={{
               ...btnStyle(isDark, true),
-              opacity: (isRunning || !dataLoaded) ? 0.6 : 1,
+              opacity: (isRunning || !dataLoaded || isReadOnly) ? 0.6 : 1,
               minWidth: 120,
             }}
+            title={isReadOnly ? 'Read-only mode - cannot execute queries' : ''}
           >
             {isRunning ? 'Running...' : 'Run Query'}
           </button>
+
+          {/* Access Control Badge */}
+          {accessHints && (
+            <div style={{
+              fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 6,
+              textTransform: 'uppercase', letterSpacing: '0.5px',
+              backgroundColor: accessHints.isReadOnly ? (isDark ? '#422006' : '#fef3c7') : (isDark ? '#1e3a5f' : '#e0e7ff'),
+              color: accessHints.isReadOnly ? (isDark ? '#fcd34d' : '#92400e') : (isDark ? '#60a5fa' : '#3730a3'),
+              border: `1px solid ${accessHints.isReadOnly ? (isDark ? '#b45309' : '#fcd34d') : (isDark ? '#1e40af' : '#c7d2fe')}`,
+              cursor: 'pointer',
+            }}
+            onClick={() => setShowGuardrails(!showGuardrails)}
+            title="Click to toggle guardrails panel"
+            >
+              {accessModeLabel || 'Full'}
+            </div>
+          )}
         </div>
+
+        {/* Guardrails Panel */}
+        {showGuardrails && accessHints && (
+          <div style={{
+            marginBottom: 12, padding: 12, borderRadius: 8,
+            border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+            backgroundColor: isDark ? '#1f2937' : '#f9fafb',
+            fontSize: 13,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <h4 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: isDark ? '#9ca3af' : '#6b7280' }}>
+                🛡️ Guardrails Control
+              </h4>
+              <button onClick={() => setShowGuardrails(false)} style={{ ...btnStyle(isDark, false), padding: '2px 8px', fontSize: 11 }}>
+                ×
+              </button>
+            </div>
+            
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 12 }}>
+              {/* Current Mode */}
+              <div>
+                <span style={{ color: isDark ? '#6b7280' : '#9ca3af' }}>Mode:</span>{' '}
+                <strong style={{ color: accessHints.isReadOnly ? '#f59e0b' : '#10b981' }}>
+                  {accessHints.mode || 'full'}
+                </strong>
+              </div>
+
+              {/* Description */}
+              {accessHints.description && (
+                <div style={{ color: isDark ? '#9ca3af' : '#6b7280', fontStyle: 'italic' }}>
+                  {accessHints.description}
+                </div>
+              )}
+            </div>
+
+            {/* Allowed/Blocked Operations */}
+            <div style={{ display: 'flex', gap: 24, marginTop: 12, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: 11, color: isDark ? '#6b7280' : '#9ca3af', marginBottom: 4, fontWeight: 500 }}>
+                  ✅ Allowed Operations
+                </div>
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {getAllowedOps(accessHints).map(op => (
+                    <span key={op} style={{
+                      fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                      backgroundColor: isDark ? '#065f46' : '#d1fae5',
+                      color: isDark ? '#6ee7b7' : '#047857',
+                    }}>
+                      {op.replace('_', ' ')}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {accessHints.disabledOperations && accessHints.disabledOperations.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 11, color: isDark ? '#6b7280' : '#9ca3af', marginBottom: 4, fontWeight: 500 }}>
+                    ❌ Blocked Operations
+                  </div>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                    {accessHints.disabledOperations.map(op => (
+                      <span key={op} style={{
+                        fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                        backgroundColor: isDark ? '#7f1d1d' : '#fee2e2',
+                        color: isDark ? '#fca5a5' : '#b91c1c',
+                        textDecoration: 'line-through',
+                      }}>
+                        {op.replace('_', ' ')}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Guardrail Settings */}
+            <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 11 }}>
+              {accessHints.maxRowsLimit && (
+                <div style={{
+                  padding: '4px 8px', borderRadius: 4,
+                  backgroundColor: isDark ? '#1e3a5f' : '#eff6ff',
+                  color: isDark ? '#60a5fa' : '#2563eb',
+                }}>
+                  📊 Max {accessHints.maxRowsLimit} rows/query
+                </div>
+              )}
+              {accessHints.blockSelectStar && (
+                <div style={{
+                  padding: '4px 8px', borderRadius: 4,
+                  backgroundColor: isDark ? '#7f1d1d' : '#fee2e2',
+                  color: isDark ? '#fca5a5' : '#b91c1c',
+                }}>
+                  🚫 No SELECT *
+                </div>
+              )}
+              {accessHints.requireWhereForModify && (
+                <div style={{
+                  padding: '4px 8px', borderRadius: 4,
+                  backgroundColor: isDark ? '#422006' : '#fffbeb',
+                  color: isDark ? '#fcd34d' : '#92400e',
+                }}>
+                  ⚠️ WHERE required for UPDATE/DELETE
+                </div>
+              )}
+              {accessHints.allowFullTableScan === false && (
+                <div style={{
+                  padding: '4px 8px', borderRadius: 4,
+                  backgroundColor: isDark ? '#7f1d1d' : '#fee2e2',
+                  color: isDark ? '#fca5a5' : '#b91c1c',
+                }}>
+                  🚫 No full table scan
+                </div>
+              )}
+            </div>
+
+            {/* Read-only warning */}
+            {isReadOnly && (
+              <div style={{
+                marginTop: 12, padding: '8px 12px', borderRadius: 6,
+                backgroundColor: isDark ? '#422006' : '#fffbeb',
+                border: `1px solid ${isDark ? '#b45309' : '#fcd34d'}`,
+                color: isDark ? '#fcd34d' : '#92400e',
+                fontSize: 12,
+              }}>
+                ⚠️ <strong>Read-only mode:</strong> Query execution is disabled. Only SELECT and introspection queries are allowed.
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Editor */}
         <div
@@ -401,4 +568,11 @@ function btnStyle(isDark: boolean, primary: boolean): React.CSSProperties {
     color: isDark ? '#d1d5db' : '#4b5563',
     cursor: 'pointer',
   }
+}
+
+function getAllowedOps(hints: AccessControlHints | null): string[] {
+  if (!hints) return []
+  const allOps: string[] = ['select', 'insert', 'update', 'delete', 'ddl_read', 'ddl_write', 'dcl', 'transaction', 'admin']
+  const disabled = hints.disabledOperations || []
+  return allOps.filter(op => !disabled.includes(op as any))
 }

@@ -75,6 +75,9 @@ function getAccessHints() {
   let description = `Access mode: ${mode}`
   if (mode === 'no-access') description = 'Access denied: You do not have permission to access this database'
   else if (mode === 'read-only') description = 'Read-only mode: only SELECT and introspection queries allowed'
+  else if (mode === 'write') description = 'Write mode: SELECT and INSERT allowed'
+  else if (mode === 'update') description = 'Update mode: SELECT, INSERT, and UPDATE allowed'
+  else if (mode === 'delete') description = 'Delete mode: Full CRUD access (no DDL)'
 
   return {
     mode,
@@ -85,6 +88,11 @@ function getAccessHints() {
       : isReadOnly 
         ? ['insert', 'update', 'delete', 'ddl_write', 'dcl', 'transaction', 'admin']
         : cfg.blockedOperations,
+    // Guardrail controls
+    maxRowsLimit: cfg.maxRowsLimit,
+    requireWhereForModify: cfg.requireWhereForModify || false,
+    blockSelectStar: cfg.blockSelectStar || false,
+    allowFullTableScan: cfg.allowFullTableScan !== false,
   }
 }
 // ============================================================================
