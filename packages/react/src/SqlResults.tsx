@@ -55,10 +55,10 @@ export function SqlResults({
 
   // Show pagination UI if we have onPageChange (user wants pagination) or explicit pagination data
   const hasPaginationData = data.pageSize != null && data.page != null && data.totalCount != null
-  const showPagination = onPageChange != null && (hasPaginationData || data.rows.length > 0)
-  const effectivePageSize = data.pageSize ?? 10
+  const showPagination = onPageChange != null && (hasPaginationData || (data.rows.length > 0 && data.rowCount >= 0))
+  const effectivePageSize = data.pageSize ?? (data.rows.length > 0 ? data.rows.length : 10)
   const effectivePage = data.page ?? 0
-  const effectiveTotalCount = data.totalCount ?? data.rows.length
+  const effectiveTotalCount = data.totalCount ?? (data.rows.length > 0 ? data.rows.length : 0)
   const totalPages = Math.ceil(effectiveTotalCount / effectivePageSize) || 1
 
   return (

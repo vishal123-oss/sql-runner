@@ -71,8 +71,10 @@ export class LocalExecutor implements DatabaseAdapter {
         const { page, pageSize } = options || {}
 
         if (pageSize != null && page != null) {
+          // Remove trailing semicolon if present before appending LIMIT/OFFSET
+          const sqlWithoutSemicolon = trimmed.replace(/;\s*$/, '')
           // Add LIMIT and OFFSET for pagination (SQLite style)
-          finalSql = `${trimmed} LIMIT ${pageSize} OFFSET ${page * pageSize}`
+          finalSql = `${sqlWithoutSemicolon} LIMIT ${pageSize} OFFSET ${page * pageSize};`
         }
 
         const stmt = this.db.prepare(finalSql)

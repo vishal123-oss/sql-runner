@@ -37,10 +37,12 @@ const SAMPLE_SCHEMA = {
 }
 
 const SAMPLE_QUERIES = [
-  'SELECT * FROM users;',
-  'SELECT u.name, o.product, o.amount FROM users u JOIN orders o ON u.id = o.user_id;',
-  "SELECT city, COUNT(*) as total, AVG(age) as avg_age FROM users GROUP BY city HAVING total > 1;",
-  "SELECT * FROM products WHERE price > 20 ORDER BY price DESC;",
+  'SELECT id, name, email FROM users LIMIT 10;',
+  'SELECT u.name, o.product, o.amount FROM users u JOIN orders o ON u.id = o.user_id WHERE o.status = "completed";',
+  'INSERT INTO users (name, email, age, city) VALUES ("New User", "new@example.com", 25, "London");',
+  'UPDATE users SET age = 31 WHERE name = "Alice";',
+  'ALTER TABLE products ADD COLUMN stock INTEGER DEFAULT 0;',
+  'SELECT city, COUNT(*) as total FROM users GROUP BY city HAVING total > 1;',
 ]
 
 type ConnectionStatus = 'checking' | 'connected' | 'error' | null
