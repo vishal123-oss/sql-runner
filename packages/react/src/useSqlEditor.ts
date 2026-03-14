@@ -143,7 +143,7 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
       executor: opts.executor,
       validateDelay: opts.validateDelay,
       guardrails: opts.guardrails,
-      onChange: (value) => {
+      onChange: (value: string) => {
         setSqlState(value)
         optionsRef.current.onChange?.(value)
         
@@ -158,10 +158,10 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
           }
         }
       },
-      onValidate: (errs) => {
+      onValidate: (errs: ValidationError[]) => {
         setErrors(errs)
       },
-      onExecute: (_sql, result) => {
+      onExecute: (_sql: string, result: QueryResult) => {
         setResults(result)
       },
       onError: () => {

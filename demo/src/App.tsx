@@ -8,7 +8,7 @@ import {
   type AccessMode,
   type AccessControlConfig
 } from '@vsql/core'
-import { USE_REMOTE_DB, API_BASE_URL } from './db/config'
+import { USE_REMOTE_DB, API_BASE_URL, FALLBACK_TO_LOCAL } from './db/config'
 import { remoteDbAdapter } from './db/remoteAdapter'
 
 if (!USE_REMOTE_DB) configureSqlJsWasm('/sql-wasm.wasm')
@@ -55,6 +55,7 @@ export function App() {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(USE_REMOTE_DB ? 'checking' : null)
   const [activeConnection, setActiveConnection] = useState<string>('default')
   const [connectionError, setConnectionError] = useState<string | null>(null)
+  const [useRemoteDb, setUseRemoteDb] = useState(USE_REMOTE_DB)
   const [accessHints, setAccessHints] = useState<AccessControlHints | null>(null)
   const [showGuardrails, setShowGuardrails] = useState(false)
   const [showAuditLogs, setShowAuditLogs] = useState(false)
@@ -133,7 +134,7 @@ export function App() {
     dialect,
     schema: SAMPLE_SCHEMA,
     theme,
-    executor: USE_REMOTE_DB ? remoteDbAdapter : 'local',
+    executor: useRemoteDb ? remoteDbAdapter : 'local',
     placeholder: 'Write your SQL query here... (Ctrl+Enter to run)',
     value: 'SELECT * FROM users;',
     minHeight: 180,
@@ -144,7 +145,7 @@ export function App() {
 
   // Generate initial access hints on mount for local mode
   useEffect(() => {
-    if (!USE_REMOTE_DB) {
+    if (!useRemoteDb) {
       import('@vsql/core').then(({ generateAccessHints }) => {
         setAccessHints(generateAccessHints(localGuardrails))
       })
@@ -153,18 +154,18 @@ export function App() {
         .then(hints => hints && setAccessHints(hints))
         .catch(() => {})
     }
-  }, [])
+  }, [useRemoteDb])
 
   // Update remote hints when they change
   useEffect(() => {
-    if (USE_REMOTE_DB && hookAccessHints) setAccessHints(hookAccessHints)
-  }, [USE_REMOTE_DB, hookAccessHints])
+    if (useRemoteDb && hookAccessHints) setAccessHints(hookAccessHints)
+  }, [useRemoteDb, hookAccessHints])
 
   const seedDone = useRef(false)
 
   // When using remote DB: check API health and enable Run Query
   useEffect(() => {
-    if (!USE_REMOTE_DB) return
+    if (!useRemoteDb) return
     setDataLoaded(true)
     const url = `${API_BASE_URL.replace(/\/$/, '')}/api/health`
     fetch(url)
@@ -176,17 +177,19 @@ export function App() {
         } else {
           setConnectionStatus('error')
           setConnectionError(data?.error || 'Connection failed')
+          if (FALLBACK_TO_LOCAL) setUseRemoteDb(false)
         }
       })
       .catch((err) => {
         setConnectionStatus('error')
         setConnectionError(err?.message || 'Cannot reach server. Start it with: pnpm run server')
+        if (FALLBACK_TO_LOCAL) setUseRemoteDb(false)
       })
-  }, [])
+  }, [useRemoteDb, FALLBACK_TO_LOCAL])
 
   // Load real schema from API when using remote DB and editor is ready
   useEffect(() => {
-    if (!USE_REMOTE_DB || !editor || !remoteDbAdapter.getSchema) return
+    if (!useRemoteDb || !editor || !remoteDbAdapter.getSchema) return
     remoteDbAdapter
       .getSchema()
       .then((schema) => {
@@ -194,11 +197,14 @@ export function App() {
           editor.setSchema(schema)
         }
       })
-      .catch(() => { /* keep default schema on error */ })
-  }, [editor])
+      .catch((err) => {
+        console.warn('Failed to load remote schema:', err)
+        if (FALLBACK_TO_LOCAL) setUseRemoteDb(false)
+      })
+  }, [editor, useRemoteDb, FALLBACK_TO_LOCAL])
 
   useEffect(() => {
-    if (USE_REMOTE_DB || !editor || seedDone.current) return
+    if (useRemoteDb || !editor || seedDone.current) return
     seedDone.current = true
 
     ;(async () => {
@@ -258,7 +264,7 @@ export function App() {
         setStatusMessage('Error loading data: ' + e.message)
       }
     })()
-  }, [editor])
+  }, [editor, useRemoteDb])
 
   const handleRun = useCallback(async (page = 0, size = pageSize) => {
     setStatusMessage(null)

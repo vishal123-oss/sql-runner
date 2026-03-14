@@ -17,6 +17,7 @@ import {
   type ValidationError,
   type QueryResult,
   type AccessControlHints,
+  type AccessControlConfig,
 } from '@vsql/core'
 
 export interface SqlEditorProps {
@@ -130,12 +131,12 @@ export const SqlEditor = forwardRef<SqlEditorRef, SqlEditorProps>(
         executor,
         validateDelay,
         guardrails,
-        onChange: (val) => callbacksRef.current.onChange?.(val),
-        onValidate: (errs) => callbacksRef.current.onValidate?.(errs),
-        onExecute: (sql, result) => {
+        onChange: (val: string) => callbacksRef.current.onChange?.(val),
+        onValidate: (errs: ValidationError[]) => callbacksRef.current.onValidate?.(errs),
+        onExecute: (sql: string, result: QueryResult) => {
           callbacksRef.current.onExecute?.(sql, result)
         },
-        onError: (err, sql) => callbacksRef.current.onError?.(err, sql),
+        onError: (err: Error, sql: string) => callbacksRef.current.onError?.(err, sql),
         keyBindings: [
           {
             key: 'Mod-Enter',
@@ -260,7 +261,7 @@ export const SqlEditor = forwardRef<SqlEditorRef, SqlEditorProps>(
             {badgeLabel}
           </div>
         )}
-        {(
+        {showPermissions && accessHints && (
           <div style={{
             position: 'absolute',
             top: 36,

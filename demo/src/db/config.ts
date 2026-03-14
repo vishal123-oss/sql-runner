@@ -16,3 +16,6 @@ export const API_KEY = import.meta.env.VITE_API_KEY ?? ''
 
 // Set to true to use your remote database; false to use in-browser SQLite demo
 export const USE_REMOTE_DB = import.meta.env.VITE_USE_REMOTE_DB === 'true'
+
+// If remote DB fails, optionally fallback to local (default true)
+export const FALLBACK_TO_LOCAL = import.meta.env.VITE_FALLBACK_TO_LOCAL !== 'false'
