@@ -58,6 +58,8 @@ export function App() {
   const [showAuditLogs, setShowAuditLogs] = useState(false)
   const [auditLogs, setAuditLogs] = useState<any[]>([])
   const [userName, setUserName] = useState(localStorage.getItem('vsql_user') || 'Admin')
+  // Local audit logs storage for local-only mode
+  const localAuditLogsRef = useRef<any[]>([])
   const [paginationVariant, setPaginationVariant] = useState<'simple' | 'full' | 'compact'>('full')
   const [pageSize, setPageSize] = useState(10)
   const [localGuardrails, setLocalGuardrails] = useState<AccessControlConfig>({
@@ -73,15 +75,27 @@ export function App() {
   }, [userName])
 
   const fetchAuditLogs = useCallback(async () => {
+    if (!USE_REMOTE_DB) {
+      // For local mode, use local storage
+      setAuditLogs([...localAuditLogsRef.current].slice(-100).reverse())
+      return
+    }
     try {
       const res = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/api/audit-logs`)
       if (res.ok) setAuditLogs(await res.json())
     } catch {}
-  }, [])
+  }, [USE_REMOTE_DB])
 
   const updateBackendConfig = async (updates: any) => {
     if (!USE_REMOTE_DB) {
-      setLocalGuardrails(prev => ({ ...prev, ...updates }))
+      setLocalGuardrails(prev => {
+        const newConfig = { ...prev, ...updates }
+        // Regenerate access hints from new config
+        import('@vsql/core').then(({ generateAccessHints }) => {
+          setAccessHints(generateAccessHints(newConfig))
+        })
+        return newConfig
+      })
       return
     }
     try {
@@ -126,26 +140,23 @@ export function App() {
     guardrails: localGuardrails,
   })
 
-  // Fetch access hints from backend or local config
+  // Generate initial access hints on mount for local mode
   useEffect(() => {
     if (!USE_REMOTE_DB) {
-      // For local, generate hints from localGuardrails
       import('@vsql/core').then(({ generateAccessHints }) => {
         setAccessHints(generateAccessHints(localGuardrails))
       })
-      return
+    } else {
+      remoteDbAdapter.getAccessHints?.()
+        .then(hints => hints && setAccessHints(hints))
+        .catch(() => {})
     }
-    if (hookAccessHints) {
-      setAccessHints(hookAccessHints)
-      return
-    }
-    // Fetch from adapter
-    remoteDbAdapter.getAccessHints?.()
-      .then(hints => {
-        if (hints) setAccessHints(hints)
-      })
-      .catch(() => {})
-  }, [USE_REMOTE_DB, hookAccessHints, localGuardrails])
+  }, [])
+
+  // Update remote hints when they change
+  useEffect(() => {
+    if (USE_REMOTE_DB && hookAccessHints) setAccessHints(hookAccessHints)
+  }, [USE_REMOTE_DB, hookAccessHints])
 
   const seedDone = useRef(false)
 
@@ -254,10 +265,36 @@ export function App() {
       if (!result) {
         setStatusMessage('Query returned no data.')
       }
+      // Log to local audit for local mode
+      if (!USE_REMOTE_DB && result) {
+        const logEntry = {
+          id: Date.now(),
+          user: userName,
+          sql: result.sql || 'Unknown query',
+          status: 'success',
+          resultSize: result.rowCount ?? 0,
+          timestamp: new Date().toISOString(),
+        }
+        localAuditLogsRef.current.push(logEntry)
+        if (showAuditLogs) fetchAuditLogs()
+      }
     } catch (e: any) {
       setStatusMessage('Execution error: ' + (e?.message || String(e)))
+      // Log error to local audit
+      if (!USE_REMOTE_DB) {
+        const logEntry = {
+          id: Date.now(),
+          user: userName,
+          sql: editor?.getValue() || 'Unknown query',
+          status: 'error',
+          resultSize: 0,
+          timestamp: new Date().toISOString(),
+        }
+        localAuditLogsRef.current.push(logEntry)
+        if (showAuditLogs) fetchAuditLogs()
+      }
     }
-  }, [run, pageSize])
+  }, [run, pageSize, USE_REMOTE_DB, userName, showAuditLogs, fetchAuditLogs, editor])
 
   const handlePageChange = (page: number, size: number) => {
     setPageSize(size)
@@ -350,8 +387,9 @@ export function App() {
 
           <button 
             onClick={() => {
-              setShowAuditLogs(!showAuditLogs)
-              if (!showAuditLogs) fetchAuditLogs()
+              const newState = !showAuditLogs
+              setShowAuditLogs(newState)
+              if (newState) fetchAuditLogs()
             }} 
             style={btnStyle(isDark, false)}
           >
@@ -412,141 +450,299 @@ export function App() {
             {isRunning ? 'Running...' : 'Run Query'}
           </button>
 
-          {/* Access Control Badge */}
-          {accessHints && (
-            <div style={{
-              fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 6,
-              textTransform: 'uppercase', letterSpacing: '0.5px',
-              backgroundColor: accessHints.isReadOnly ? (isDark ? '#422006' : '#fef3c7') : (isDark ? '#1e3a5f' : '#e0e7ff'),
-              color: accessHints.isReadOnly ? (isDark ? '#fcd34d' : '#92400e') : (isDark ? '#60a5fa' : '#3730a3'),
-              border: `1px solid ${accessHints.isReadOnly ? (isDark ? '#b45309' : '#fcd34d') : (isDark ? '#1e40af' : '#c7d2fe')}`,
-              cursor: 'pointer',
-            }}
+          {/* Manage Access Button */}
+          <button
             onClick={() => setShowGuardrails(!showGuardrails)}
-            title="Click to toggle guardrails panel"
-            >
-              {accessModeLabel || 'Full'}
-            </div>
-          )}
+            style={{
+              ...btnStyle(isDark, false),
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              borderColor: accessHints?.isReadOnly ? (isDark ? '#b45309' : '#f59e0b') : (isDark ? '#3b82f6' : '#2563eb'),
+              backgroundColor: accessHints?.isReadOnly ? (isDark ? '#422006' : '#fffbeb') : (isDark ? '#1e3a5f' : '#eff6ff'),
+              color: accessHints?.isReadOnly ? (isDark ? '#fcd34d' : '#92400e') : (isDark ? '#60a5fa' : '#2563eb'),
+            }}
+            title="Manage access permissions and guardrails"
+          >
+            <span style={{ fontSize: 14 }}>🔐</span>
+            Manage Access
+            {accessHints?.mode && accessHints.mode !== 'full' && (
+              <span style={{
+                fontSize: 10,
+                padding: '1px 5px',
+                borderRadius: 3,
+                backgroundColor: isDark ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.1)',
+                textTransform: 'capitalize',
+              }}>
+                {accessHints.mode.replace('-', ' ')}
+              </span>
+            )}
+          </button>
         </div>
 
-        {/* Guardrails Panel */}
-        {showGuardrails && accessHints && (
+        {/* Guardrails Panel - Redesigned */}
+        {showGuardrails && (
           <div style={{
-            marginBottom: 12, padding: 12, borderRadius: 8,
+            marginBottom: 12,
+            borderRadius: 12,
             border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
-            backgroundColor: isDark ? '#1f2937' : '#f9fafb',
-            fontSize: 13,
+            backgroundColor: isDark ? '#1f2937' : '#ffffff',
+            boxShadow: isDark ? '0 10px 40px rgba(0,0,0,0.4)' : '0 10px 40px rgba(0,0,0,0.08)',
+            overflow: 'hidden',
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <h4 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: isDark ? '#9ca3af' : '#6b7280' }}>
-                🛡️ Guardrails Control
-              </h4>
-              <button onClick={() => setShowGuardrails(false)} style={{ ...btnStyle(isDark, false), padding: '2px 8px', fontSize: 11 }}>
-                ×
+            {/* Header */}
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '14px 18px',
+              borderBottom: `1px solid ${isDark ? '#374151' : '#f3f4f6'}`,
+              backgroundColor: isDark ? '#111827' : '#f9fafb',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 20 }}>🔐</span>
+                <div>
+                  <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: isDark ? '#f3f4f6' : '#111827' }}>
+                    Access Control
+                  </h4>
+                  <p style={{ margin: 0, fontSize: 11, color: isDark ? '#6b7280' : '#9ca3af' }}>
+                    Configure permissions and security guardrails
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowGuardrails(false)} 
+                style={{ 
+                  ...btnStyle(isDark, false), 
+                  padding: '6px 12px', 
+                  fontSize: 12,
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  color: isDark ? '#9ca3af' : '#6b7280',
+                }}
+              >
+                ✕ Close
               </button>
             </div>
-            
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 12 }}>
-            {/* Current Mode */}
-            <div>
-              <span style={{ color: isDark ? '#6b7280' : '#9ca3af' }}>Mode:</span>{' '}
-              <select
-                value={accessHints.mode || 'full'}
-                onChange={(e) => updateBackendConfig({ mode: e.target.value })}
-                style={{ ...selectStyle(isDark), padding: '2px 4px', fontSize: 11, marginLeft: 4 }}
-              >
-                <option value="no-access">No Access</option>
-                <option value="read-only">Read-only</option>
-                <option value="write">Write</option>
-                <option value="update">Update</option>
-                <option value="delete">Delete</option>
-                <option value="full">Full Access</option>
-              </select>
+
+            <div style={{ padding: 18 }}>
+              {/* Permission Level Selector */}
+              <div style={{ marginBottom: 18 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: isDark ? '#9ca3af' : '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Permission Level
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 8 }}>
+                  {[
+                    { value: 'no-access', label: 'No Access', icon: '🚫', color: isDark ? '#7f1d1d' : '#fee2e2' },
+                    { value: 'read-only', label: 'Read Only', icon: '👁️', color: isDark ? '#1e3a5f' : '#dbeafe' },
+                    { value: 'write', label: 'Write', icon: '✏️', color: isDark ? '#064e3b' : '#d1fae5' },
+                    { value: 'update', label: 'Update', icon: '🔄', color: isDark ? '#4c1d95' : '#ede9fe' },
+                    { value: 'delete', label: 'Delete', icon: '🗑️', color: isDark ? '#7c2d12' : '#ffedd5' },
+                    { value: 'full', label: 'Full Access', icon: '✅', color: isDark ? '#064e3b' : '#d1fae5' },
+                  ].map(mode => (
+                    <button
+                      key={mode.value}
+                      onClick={() => updateBackendConfig({ mode: mode.value })}
+                      style={{
+                        padding: '10px 8px',
+                        borderRadius: 8,
+                        border: localGuardrails.mode === mode.value 
+                          ? `2px solid ${isDark ? '#3b82f6' : '#2563eb'}` 
+                          : `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                        backgroundColor: localGuardrails.mode === mode.value 
+                          ? (isDark ? '#1e3a5f' : '#eff6ff') 
+                          : (isDark ? '#111827' : '#fff'),
+                        color: isDark ? '#e5e7eb' : '#374151',
+                        cursor: 'pointer',
+                        textAlign: 'center',
+                        fontSize: 11,
+                        fontWeight: 500,
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      <div style={{ fontSize: 16, marginBottom: 4 }}>{mode.icon}</div>
+                      <div style={{ fontSize: 10 }}>{mode.label}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Permission Matrix */}
+              <div style={{ marginBottom: 18 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: isDark ? '#9ca3af' : '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Allowed Operations
+                </label>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                  gap: 8,
+                  padding: 12,
+                  borderRadius: 10,
+                  backgroundColor: isDark ? '#111827' : '#f9fafb',
+                  border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                }}>
+                  {[
+                    { op: 'SELECT', desc: 'Read data', category: 'select' },
+                    { op: 'INSERT', desc: 'Add rows', category: 'insert' },
+                    { op: 'UPDATE', desc: 'Modify rows', category: 'update' },
+                    { op: 'DELETE', desc: 'Remove rows', category: 'delete' },
+                    { op: 'CREATE', desc: 'Create tables', category: 'ddl_write' },
+                    { op: 'DROP', desc: 'Delete tables', category: 'ddl_write' },
+                    { op: 'ALTER', desc: 'Modify schema', category: 'ddl_write' },
+                    { op: 'PRAGMA', desc: 'Introspection', category: 'select' },
+                  ].map(item => {
+                    const isAllowed = getAllowedOps(accessHints).includes(item.category)
+                    return (
+                      <div
+                        key={item.op}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          padding: '8px 10px',
+                          borderRadius: 6,
+                          backgroundColor: isAllowed 
+                            ? (isDark ? '#065f46' : '#ecfdf5') 
+                            : (isDark ? '#1f2937' : '#f3f4f6'),
+                          border: `1px solid ${isAllowed 
+                            ? (isDark ? '#059669' : '#a7f3d0') 
+                            : (isDark ? '#374151' : '#e5e7eb')}`,
+                        }}
+                      >
+                        <span style={{ fontSize: 14 }}>{isAllowed ? '✓' : '✕'}</span>
+                        <div>
+                          <div style={{ 
+                            fontSize: 11, 
+                            fontWeight: 600, 
+                            fontFamily: 'monospace',
+                            color: isAllowed 
+                              ? (isDark ? '#34d399' : '#047857') 
+                              : (isDark ? '#6b7280' : '#9ca3af'),
+                          }}>
+                            {item.op}
+                          </div>
+                          <div style={{ fontSize: 9, color: isDark ? '#6b7280' : '#9ca3af' }}>{item.desc}</div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Guardrail Toggles */}
+              <div style={{ marginBottom: 18 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 8, color: isDark ? '#9ca3af' : '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Query Guardrails
+                </label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                  <label style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: 8, 
+                    padding: '8px 14px',
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    backgroundColor: localGuardrails.blockSelectStar ? (isDark ? '#422006' : '#fef3c7') : (isDark ? '#111827' : '#f9fafb'),
+                    border: `1px solid ${localGuardrails.blockSelectStar ? (isDark ? '#b45309' : '#fcd34d') : (isDark ? '#374151' : '#e5e7eb')}`,
+                    fontSize: 12,
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={localGuardrails.blockSelectStar || false}
+                      onChange={(e) => updateBackendConfig({ blockSelectStar: e.target.checked })}
+                      style={{ accentColor: '#2563eb' }}
+                    />
+                    <span>🚫 Block SELECT *</span>
+                  </label>
+
+                  <label style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: 8, 
+                    padding: '8px 14px',
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    backgroundColor: localGuardrails.requireWhereForModify ? (isDark ? '#1e3a5f' : '#dbeafe') : (isDark ? '#111827' : '#f9fafb'),
+                    border: `1px solid ${localGuardrails.requireWhereForModify ? (isDark ? '#3b82f6' : '#93c5fd') : (isDark ? '#374151' : '#e5e7eb')}`,
+                    fontSize: 12,
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={localGuardrails.requireWhereForModify || false}
+                      onChange={(e) => updateBackendConfig({ requireWhereForModify: e.target.checked })}
+                      style={{ accentColor: '#2563eb' }}
+                    />
+                    <span>⚠️ WHERE required</span>
+                  </label>
+
+                  <label style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: 8, 
+                    padding: '8px 14px',
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    backgroundColor: localGuardrails.allowFullTableScan === false ? (isDark ? '#422006' : '#fef3c7') : (isDark ? '#111827' : '#f9fafb'),
+                    border: `1px solid ${localGuardrails.allowFullTableScan === false ? (isDark ? '#b45309' : '#fcd34d') : (isDark ? '#374151' : '#e5e7eb')}`,
+                    fontSize: 12,
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={localGuardrails.allowFullTableScan === false}
+                      onChange={(e) => updateBackendConfig({ allowFullTableScan: !e.target.checked })}
+                      style={{ accentColor: '#2563eb' }}
+                    />
+                    <span>🔒 No full table scan</span>
+                  </label>
+
+                  <div style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: 8, 
+                    padding: '8px 14px',
+                    borderRadius: 8,
+                    backgroundColor: isDark ? '#111827' : '#f9fafb',
+                    border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}`,
+                    fontSize: 12,
+                  }}>
+                    <span>📊 Max rows:</span>
+                    <select
+                      value={localGuardrails.maxRowsLimit || 1000}
+                      onChange={(e) => updateBackendConfig({ maxRowsLimit: parseInt(e.target.value) })}
+                      style={{ ...selectStyle(isDark), padding: '4px 8px', fontSize: 11, width: 80 }}
+                    >
+                      <option value={10}>10</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                      <option value={500}>500</option>
+                      <option value={1000}>1000</option>
+                      <option value={5000}>5000</option>
+                      <option value={-1}>Unlimited</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Warning Banner */}
+              {isReadOnly && (
+                <div style={{
+                  padding: '12px 16px',
+                  borderRadius: 8,
+                  backgroundColor: isDark ? '#422006' : '#fffbeb',
+                  border: `1px solid ${isDark ? '#b45309' : '#fcd34d'}`,
+                  color: isDark ? '#fcd34d' : '#92400e',
+                  fontSize: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                }}>
+                  <span style={{ fontSize: 18 }}>⚠️</span>
+                  <div>
+                    <strong>Read-only mode active.</strong> Query execution is disabled. Only SELECT, WITH, PRAGMA, EXPLAIN, and DESCRIBE queries are permitted.
+                  </div>
+                </div>
+              )}
             </div>
-
-            {/* Allowed Actions */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ color: isDark ? '#6b7280' : '#9ca3af' }}>Allowed Actions:</span>
-              <div style={{ display: 'flex', gap: 4 }}>
-                {['select', 'insert', 'update', 'delete', 'ddl_write'].map(op => {
-                  const isAllowed = getAllowedOps(accessHints).includes(op)
-                  return (
-                    <span key={op} style={{
-                      padding: '2px 6px', borderRadius: 4, fontSize: 10,
-                      backgroundColor: isAllowed ? (isDark ? '#064e3b' : '#d1fae5') : (isDark ? '#450a0a' : '#fee2e2'),
-                      color: isAllowed ? (isDark ? '#34d399' : '#065f46') : (isDark ? '#f87171' : '#991b1b'),
-                      border: `1px solid ${isAllowed ? (isDark ? '#065f46' : '#6ee7b7') : (isDark ? '#7f1d1d' : '#fecaca')}`,
-                      textTransform: 'capitalize'
-                    }}>
-                      {op.replace('ddl_', '')}
-                    </span>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* Description */}
-            {accessHints.description && (
-              <div style={{ color: isDark ? '#9ca3af' : '#6b7280', fontStyle: 'italic', display: 'flex', alignItems: 'center' }}>
-                {accessHints.description}
-              </div>
-            )}
-          </div>
-
-            {/* Guardrail Settings */}
-            <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 11, alignItems: 'center' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={accessHints.blockSelectStar}
-                  onChange={(e) => updateBackendConfig({ blockSelectStar: e.target.checked })}
-                />
-                🚫 No SELECT *
-              </label>
-
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={accessHints.requireWhereForModify}
-                  onChange={(e) => updateBackendConfig({ requireWhereForModify: e.target.checked })}
-                />
-                ⚠️ WHERE required
-              </label>
-
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={accessHints.allowFullTableScan === false}
-                  onChange={(e) => updateBackendConfig({ allowFullTableScan: !e.target.checked })}
-                />
-                🚫 No full scan
-              </label>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>📊 Max rows:</span>
-                <input
-                  type="number"
-                  value={accessHints.maxRowsLimit || 1000}
-                  onChange={(e) => updateBackendConfig({ maxRowsLimit: parseInt(e.target.value) })}
-                  style={{ ...selectStyle(isDark), padding: '2px 4px', fontSize: 11, width: 60 }}
-                />
-              </div>
-            </div>
-
-
-            {/* Read-only warning */}
-            {isReadOnly && (
-              <div style={{
-                marginTop: 12, padding: '8px 12px', borderRadius: 6,
-                backgroundColor: isDark ? '#422006' : '#fffbeb',
-                border: `1px solid ${isDark ? '#b45309' : '#fcd34d'}`,
-                color: isDark ? '#fcd34d' : '#92400e',
-                fontSize: 12,
-              }}>
-                ⚠️ <strong>Read-only mode:</strong> Query execution is disabled. Only SELECT and introspection queries are allowed.
-              </div>
-            )}
           </div>
         )}
 
