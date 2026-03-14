@@ -15,6 +15,7 @@ import {
   type ThemeConfig,
   type ValidationError,
   type QueryResult,
+  type AccessControlHints,
 } from '@vsql/core'
 
 export interface SqlEditorProps {
@@ -30,7 +31,7 @@ export interface SqlEditorProps {
   defaultValue?: string
   /** Placeholder text */
   placeholder?: string
-  /** Read-only mode */
+  /** Read-only mode (also can be derived from accessHints) */
   readOnly?: boolean
   /** Minimum height in pixels */
   minHeight?: number
@@ -54,6 +55,10 @@ export interface SqlEditorProps {
   onError?: (error: Error, sql: string) => void
   /** Called on Ctrl/Cmd+Enter */
   onRun?: () => void
+  /** Access control hints from backend (for UI only, not security) */
+  accessHints?: AccessControlHints
+  /** Show access mode badge in corner (default: true if accessHints provided) */
+  showAccessBadge?: boolean
 }
 
 export interface SqlEditorRef {
@@ -90,7 +95,13 @@ export const SqlEditor = forwardRef<SqlEditorRef, SqlEditorProps>(
       onExecute,
       onError,
       onRun,
+      accessHints,
+      showAccessBadge,
     } = props
+
+    // Derive effective read-only from prop or accessHints
+    const effectiveReadOnly = readOnly || accessHints?.isReadOnly || false
+    const shouldShowBadge = showAccessBadge ?? (accessHints != null)
 
     const containerRef = useRef<HTMLDivElement>(null)
     const editorRef = useRef<SqlEditorInstance | null>(null)
@@ -109,7 +120,7 @@ export const SqlEditor = forwardRef<SqlEditorRef, SqlEditorProps>(
         theme,
         placeholder,
         value: value ?? defaultValue,
-        readOnly,
+        readOnly: effectiveReadOnly,
         minHeight,
         maxHeight,
         executor,
@@ -198,12 +209,43 @@ export const SqlEditor = forwardRef<SqlEditorRef, SqlEditorProps>(
       ...style,
     }
 
+    // Access mode badge styles
+    const badgeStyle: React.CSSProperties = {
+      position: 'absolute',
+      top: 8,
+      right: 8,
+      padding: '2px 8px',
+      borderRadius: 4,
+      fontSize: 11,
+      fontWeight: 600,
+      textTransform: 'uppercase',
+      letterSpacing: '0.5px',
+      backgroundColor: accessHints?.isReadOnly ? '#fef3c7' : '#e0e7ff',
+      color: accessHints?.isReadOnly ? '#92400e' : '#3730a3',
+      border: `1px solid ${accessHints?.isReadOnly ? '#fcd34d' : '#c7d2fe'}`,
+      zIndex: 10,
+    }
+
+    const badgeLabel = accessHints?.mode
+      ? accessHints.mode === 'read-only' ? 'Read-only'
+        : accessHints.mode === 'write' ? 'Write'
+        : accessHints.mode === 'update' ? 'Update'
+        : accessHints.mode === 'delete' ? 'Delete'
+        : 'Full'
+      : null
+
     return (
       <div
         ref={containerRef}
         className={className ? `vsql-editor ${className}` : 'vsql-editor'}
-        style={wrapperStyle}
-      />
+        style={{ ...wrapperStyle, position: 'relative' }}
+      >
+        {shouldShowBadge && badgeLabel && (
+          <div style={badgeStyle} title={accessHints?.description ?? 'Access mode'}>
+            {badgeLabel}
+          </div>
+        )}
+      </div>
     )
   },
 )

@@ -1,4 +1,5 @@
-import type { DatabaseAdapter, QueryResult, QueryResultColumn } from './types'
+import type { DatabaseAdapter, QueryResult, QueryResultColumn, AccessControlConfig, AccessControlHints } from './types'
+import { validateAccessControl, generateAccessHints } from './accessControl'
 
 // ---------------------------------------------------------------------------
 // Local executor (sql.js — SQLite compiled to WebAssembly)
@@ -169,5 +170,106 @@ export class AdapterExecutor {
 
   destroy(): void {
     this.adapter.destroy?.()
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Access Controlled Executor (wraps any adapter with guardrails)
+// ---------------------------------------------------------------------------
+
+/**
+ * Wraps a DatabaseAdapter with access control validation.
+ *
+ * SECURITY NOTE:
+ * - For remote adapters: Client-side validation is for UX only.
+ *   Backend MUST enforce access control on /api/query endpoint.
+ * - For local adapters: This IS the enforcement (no backend).
+ *
+ * @example
+ * // Remote adapter with hints from backend
+ * const adapter = createAccessControlledAdapter(remoteAdapter, {
+ *   hints: { mode: 'read-only', isReadOnly: true },
+ *   // config is NOT sent to client - backend has it
+ * })
+ */
+export class AccessControlledExecutor {
+  private config: AccessControlConfig
+
+  constructor(
+    private adapter: DatabaseAdapter,
+    options: {
+      /** Full config (for local enforcement). Backend should NOT send this to client. */
+      config?: AccessControlConfig
+      /** Hints only (for UI). Safe to send from backend. */
+      hints?: AccessControlHints
+    } = {},
+  ) {
+    // If hints provided, derive a minimal config for client-side validation
+    // Full config should come from options.config (backend only)
+    this.config = options.config ?? {
+      mode: options.hints?.mode ?? 'full',
+      // Derive blocked ops from hints (advisory only)
+      blockedOperations: options.hints?.disabledOperations,
+    }
+  }
+
+  /**
+   * Get current access control hints for UI display.
+   */
+  getAccessHints(): AccessControlHints | null {
+    // Prefer adapter's own hints if available, else generate from config
+    const adapterHints = this.adapter.getAccessHints?.()
+    if (adapterHints) return adapterHints
+    return generateAccessHints(this.config)
+  }
+
+  async execute(sql: string): Promise<QueryResult> {
+    // Validate against config (enforcement for local, advisory for remote)
+    const validation = validateAccessControl(sql, this.config)
+    if (!validation.allowed) {
+      throw new Error(
+        `Access denied: ${validation.reason ?? 'Operation not permitted'} ` +
+        `[category: ${validation.category}, mode: ${validation.appliedMode}]`,
+      )
+    }
+
+    const start = performance.now()
+    const result = await this.adapter.execute(sql)
+    result.elapsed = result.elapsed ?? Math.round(performance.now() - start)
+    result.sql = sql
+    return result
+  }
+
+  async getSchema() {
+    return this.adapter.getSchema?.() ?? {}
+  }
+
+  destroy(): void {
+    this.adapter.destroy?.()
+  }
+}
+
+/**
+ * Create an access-controlled adapter wrapper.
+ *
+ * @param adapter - The underlying adapter (local or remote)
+ * @param options - Config (for enforcement) or hints (for UX)
+ * @returns A DatabaseAdapter with access control
+ */
+export function createAccessControlledAdapter(
+  adapter: DatabaseAdapter,
+  options: {
+    /** Full access control config (backend only - do NOT send to client) */
+    config?: AccessControlConfig
+    /** Hints for UI (safe to send from backend to client) */
+    hints?: AccessControlHints
+  } = {},
+): DatabaseAdapter {
+  const controlled = new AccessControlledExecutor(adapter, options)
+  return {
+    execute: (sql) => controlled.execute(sql),
+    getSchema: () => controlled.getSchema(),
+    destroy: () => controlled.destroy(),
+    getAccessHints: () => controlled.getAccessHints(),
   }
 }

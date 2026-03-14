@@ -9,6 +9,8 @@ import {
   type SqlDialect,
   type ThemePreset,
   type ThemeConfig,
+  type AccessControlHints,
+  type AccessMode,
 } from '@vsql/core'
 
 export interface UseSqlEditorOptions {
@@ -23,6 +25,8 @@ export interface UseSqlEditorOptions {
   maxHeight?: number
   validateDelay?: number
   onChange?: (value: string) => void
+  /** Access control hints from backend (for UI only, not security) */
+  accessHints?: AccessControlHints
 }
 
 export interface UseSqlEditorReturn {
@@ -48,6 +52,12 @@ export interface UseSqlEditorReturn {
   setDialect: (dialect: SqlDialect) => void
   /** Switch theme */
   setTheme: (theme: ThemePreset | ThemeConfig) => void
+  /** Access control hints (from backend, for UI display) */
+  accessHints: AccessControlHints | null
+  /** Quick check: is this editor in read-only mode? */
+  isReadOnly: boolean
+  /** Access mode label for display (e.g., "Read-only", "Write", "Full") */
+  accessModeLabel: string
 }
 
 export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorReturn {
@@ -56,11 +66,28 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
   const [results, setResults] = useState<QueryResult | null>(null)
   const [isRunning, setIsRunning] = useState(false)
   const [editorInstance, setEditorInstance] = useState<SqlEditorInstance | null>(null)
+  const [accessHints, setAccessHints] = useState<AccessControlHints | null>(options.accessHints ?? null)
 
   const editorRef = useRef<SqlEditorInstance | null>(null)
   const containerElRef = useRef<HTMLDivElement | null>(null)
   const optionsRef = useRef(options)
   optionsRef.current = options
+
+  // Fetch access hints from adapter if available
+  useEffect(() => {
+    const hints = options.accessHints
+    if (hints) {
+      setAccessHints(hints)
+      return
+    }
+    // Try to get hints from executor if it's an adapter with getAccessHints
+    const executor = options.executor
+    if (executor && typeof executor === 'object' && 'getAccessHints' in executor) {
+      const adapter = executor as { getAccessHints?: () => AccessControlHints | null }
+      const hintsFromAdapter = adapter.getAccessHints?.()
+      if (hintsFromAdapter) setAccessHints(hintsFromAdapter)
+    }
+  }, [options.accessHints, options.executor])
 
   const containerRef = useCallback((el: HTMLDivElement | null) => {
     if (containerElRef.current === el) return
@@ -143,6 +170,10 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
     editorRef.current?.setTheme(theme)
   }, [])
 
+  // Compute derived values from accessHints
+  const isReadOnly = accessHints?.isReadOnly ?? options.readOnly ?? false
+  const accessModeLabel = getAccessModeLabel(accessHints?.mode ?? 'full')
+
   return {
     containerRef,
     editor: editorInstance,
@@ -155,5 +186,27 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
     setSchema,
     setDialect,
     setTheme,
+    accessHints,
+    isReadOnly,
+    accessModeLabel,
+  }
+}
+
+/**
+ * Get human-readable label for access mode.
+ */
+function getAccessModeLabel(mode: AccessMode): string {
+  switch (mode) {
+    case 'read-only':
+      return 'Read-only'
+    case 'write':
+      return 'Write'
+    case 'update':
+      return 'Update'
+    case 'delete':
+      return 'Delete'
+    case 'full':
+    default:
+      return 'Full Access'
   }
 }

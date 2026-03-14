@@ -24,4 +24,10 @@ export type {
   ThemeConfig,
   SqlEditorConfig,
   SqlEditorInstance,
+  // Access control types
+  SqlOperationCategory,
+  AccessMode,
+  AccessControlConfig,
+  AccessControlHints,
+  AccessControlResult,
 } from '@vsql/core'
