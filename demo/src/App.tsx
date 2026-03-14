@@ -261,18 +261,23 @@ export function App() {
   const handleRun = useCallback(async (page = 0, size = pageSize) => {
     setStatusMessage(null)
     try {
+      // Always pass pagination options for consistent pagination UI
       const result = await run({ page, pageSize: size })
       if (!result) {
         setStatusMessage('Query returned no data.')
+      } else if (result.columns?.length === 0 && result.rows?.length === 0) {
+        // DML/DDL query succeeded
+        setStatusMessage(`Query executed successfully (${result.elapsed}ms)`)
+        setTimeout(() => setStatusMessage(null), 2000)
       }
       // Log to local audit for local mode
       if (!USE_REMOTE_DB && result) {
         const logEntry = {
           id: Date.now(),
           user: userName,
-          sql: result.sql || 'Unknown query',
+          sql: result.sql || editor?.getValue() || 'Unknown query',
           status: 'success',
-          resultSize: result.rowCount ?? 0,
+          resultSize: result.rowCount ?? result.totalCount ?? 0,
           timestamp: new Date().toISOString(),
         }
         localAuditLogsRef.current.push(logEntry)
@@ -435,19 +440,28 @@ export function App() {
 
           <button
             onClick={() => handleRun()}
-            disabled={isRunning || !dataLoaded || isReadOnly || (guardrailResult && !guardrailResult.allowed)}
+            disabled={
+              isRunning || 
+              !dataLoaded || 
+              isReadOnly || 
+              (guardrailResult && !guardrailResult.allowed) ||
+              activeConnection === 'user-123' ||
+              localGuardrails.mode === 'no-access'
+            }
             style={{
               ...btnStyle(isDark, true),
-              opacity: (isRunning || !dataLoaded || isReadOnly || (guardrailResult && !guardrailResult.allowed)) ? 0.6 : 1,
+              opacity: (isRunning || !dataLoaded || isReadOnly || (guardrailResult && !guardrailResult.allowed) || activeConnection === 'user-123' || localGuardrails.mode === 'no-access') ? 0.6 : 1,
               minWidth: 120,
-              backgroundColor: (guardrailResult && !guardrailResult.allowed) ? '#ef4444' : '#2563eb',
+              backgroundColor: (guardrailResult && !guardrailResult.allowed) || activeConnection === 'user-123' || localGuardrails.mode === 'no-access' ? '#ef4444' : '#2563eb',
             }}
             title={
               isReadOnly ? 'Read-only mode - cannot execute queries' : 
+              activeConnection === 'user-123' ? 'User 123 is restricted - no access' :
+              localGuardrails.mode === 'no-access' ? 'No access mode - queries disabled' :
               (guardrailResult && !guardrailResult.allowed) ? `Access Denied: ${guardrailResult.reason}` : ''
             }
           >
-            {isRunning ? 'Running...' : 'Run Query'}
+            {isRunning ? 'Running...' : activeConnection === 'user-123' || localGuardrails.mode === 'no-access' ? 'No Access' : 'Run Query'}
           </button>
 
           {/* Manage Access Button */}

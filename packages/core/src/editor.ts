@@ -218,14 +218,14 @@ export function createSqlEditor(config: SqlEditorConfigWithGuardrails): SqlEdito
   })
 
   // --- Instance methods ---
-  const instance: SqlEditorInstance = {
-    async run() {
+  const instance: SqlEditorInstance & { run(opts?: { page?: number; pageSize?: number }): Promise<QueryResult | undefined> } = {
+    async run(opts?: { page?: number; pageSize?: number }) {
       const sqlText = view.state.doc.toString().trim()
       if (!sqlText) return undefined
 
       try {
         if (activeExecutor) {
-          const result = await activeExecutor.execute(sqlText)
+          const result = await activeExecutor.execute(sqlText, opts)
           onExecute?.(sqlText, result)
           return result
         }

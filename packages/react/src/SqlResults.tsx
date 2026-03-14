@@ -53,37 +53,42 @@ export function SqlResults({
     )
   }
 
-  const isPaginated = data.pageSize != null && data.page != null && data.totalCount != null
-  const totalPages = isPaginated ? Math.ceil(data.totalCount! / data.pageSize!) : 0
+  // Show pagination UI if we have onPageChange (user wants pagination) or explicit pagination data
+  const hasPaginationData = data.pageSize != null && data.page != null && data.totalCount != null
+  const showPagination = onPageChange != null && (hasPaginationData || data.rows.length > 0)
+  const effectivePageSize = data.pageSize ?? 10
+  const effectivePage = data.page ?? 0
+  const effectiveTotalCount = data.totalCount ?? data.rows.length
+  const totalPages = Math.ceil(effectiveTotalCount / effectivePageSize) || 1
 
   return (
     <div className={cls('vsql-results', className)} style={style}>
-      {(showRowCount || showElapsed || isPaginated) && (
+      {(showRowCount || showElapsed || showPagination) && (
         <div style={styles.meta}>
           {showRowCount && (
             <span style={styles.badge}>
-              {isPaginated ? `${data.totalCount} total rows` : `${data.rowCount} row${data.rowCount !== 1 ? 's' : ''}`}
+              {hasPaginationData ? `${effectiveTotalCount} total rows` : `${data.rowCount} row${data.rowCount !== 1 ? 's' : ''}`}
             </span>
           )}
           {showElapsed && data.elapsed != null && (
             <span style={styles.elapsed}>{data.elapsed}ms</span>
           )}
           <div style={{ flex: 1 }} />
-          {isPaginated && paginationVariant === 'compact' && (
+          {showPagination && paginationVariant === 'compact' && (
             <div style={styles.paginationCompact}>
               <button
-                disabled={data.page === 0}
-                onClick={() => onPageChange?.(data.page! - 1, data.pageSize!)}
+                disabled={effectivePage === 0}
+                onClick={() => onPageChange?.(effectivePage - 1, effectivePageSize)}
                 style={styles.pageBtn}
               >
                 &lt;
               </button>
               <span style={styles.pageInfo}>
-                {data.page! + 1} / {totalPages}
+                {effectivePage + 1} / {totalPages}
               </span>
               <button
-                disabled={data.page! >= totalPages - 1}
-                onClick={() => onPageChange?.(data.page! + 1, data.pageSize!)}
+                disabled={effectivePage >= totalPages - 1}
+                onClick={() => onPageChange?.(effectivePage + 1, effectivePageSize)}
                 style={styles.pageBtn}
               >
                 &gt;
@@ -118,20 +123,20 @@ export function SqlResults({
         </table>
       </div>
 
-      {isPaginated && (paginationVariant === 'full' || paginationVariant === 'simple') && (
+      {showPagination && (paginationVariant === 'full' || paginationVariant === 'simple') && (
         <div style={styles.footer}>
           <div style={styles.pagination}>
             <button
-              disabled={data.page === 0}
-              onClick={() => onPageChange?.(0, data.pageSize!)}
+              disabled={effectivePage === 0}
+              onClick={() => onPageChange?.(0, effectivePageSize)}
               style={styles.pageBtn}
               title="First Page"
             >
               &laquo;
             </button>
             <button
-              disabled={data.page === 0}
-              onClick={() => onPageChange?.(data.page! - 1, data.pageSize!)}
+              disabled={effectivePage === 0}
+              onClick={() => onPageChange?.(effectivePage - 1, effectivePageSize)}
               style={styles.pageBtn}
               title="Previous Page"
             >
@@ -143,7 +148,7 @@ export function SqlResults({
                 {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
                   let pageNum = i
                   if (totalPages > 5) {
-                    if (data.page! > 2) pageNum = data.page! - 2 + i
+                    if (effectivePage > 2) pageNum = effectivePage - 2 + i
                     if (pageNum >= totalPages) pageNum = totalPages - 5 + i
                     if (pageNum < 0) pageNum = i
                   }
@@ -151,10 +156,10 @@ export function SqlResults({
                   return (
                     <button
                       key={pageNum}
-                      onClick={() => onPageChange?.(pageNum, data.pageSize!)}
+                      onClick={() => onPageChange?.(pageNum, effectivePageSize)}
                       style={{
                         ...styles.pageBtn,
-                        ...(data.page === pageNum ? styles.pageBtnActive : {})
+                        ...(effectivePage === pageNum ? styles.pageBtnActive : {})
                       }}
                     >
                       {pageNum + 1}
@@ -165,20 +170,20 @@ export function SqlResults({
             )}
 
             <span style={styles.pageInfo}>
-              Page {data.page! + 1} of {totalPages}
+              Page {effectivePage + 1} of {totalPages}
             </span>
 
             <button
-              disabled={data.page! >= totalPages - 1}
-              onClick={() => onPageChange?.(data.page! + 1, data.pageSize!)}
+              disabled={effectivePage >= totalPages - 1}
+              onClick={() => onPageChange?.(effectivePage + 1, effectivePageSize)}
               style={styles.pageBtn}
               title="Next Page"
             >
               &gt;
             </button>
             <button
-              disabled={data.page! >= totalPages - 1}
-              onClick={() => onPageChange?.(totalPages - 1, data.pageSize!)}
+              disabled={effectivePage >= totalPages - 1}
+              onClick={() => onPageChange?.(totalPages - 1, effectivePageSize)}
               style={styles.pageBtn}
               title="Last Page"
             >
@@ -190,7 +195,7 @@ export function SqlResults({
             <div style={styles.pageSize}>
               <span>Rows per page:</span>
               <select
-                value={data.pageSize}
+                value={effectivePageSize}
                 onChange={(e) => onPageChange?.(0, parseInt(e.target.value))}
                 style={styles.pageSizeSelect}
               >

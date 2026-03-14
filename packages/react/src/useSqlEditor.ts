@@ -105,6 +105,18 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
     refreshAccessHints()
   }, [options.accessHints, refreshAccessHints])
 
+  // Re-validate guardrails when guardrails config changes
+  useEffect(() => {
+    if (options.guardrails && sql) {
+      try {
+        const res = validateAccessControl(sql, options.guardrails)
+        setGuardrailResult(res)
+      } catch (e) {
+        setGuardrailResult(null)
+      }
+    }
+  }, [options.guardrails, sql])
+
   const containerRef = useCallback((el: HTMLDivElement | null) => {
     if (containerElRef.current === el) return
 
