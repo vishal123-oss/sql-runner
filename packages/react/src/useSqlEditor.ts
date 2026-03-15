@@ -10,6 +10,10 @@ import {
   type SqlDialect,
   type ThemePreset,
   type ThemeConfig,
+  type AccessControlHints,
+  type AccessMode,
+  type AccessControlResult,
+  type AccessControlConfig,
 } from '@vsql/core'
 
 export interface UseSqlEditorOptions {
@@ -24,6 +28,10 @@ export interface UseSqlEditorOptions {
   maxHeight?: number
   validateDelay?: number
   onChange?: (value: string) => void
+  /** Access control hints from backend (for UI only, not security) */
+  accessHints?: AccessControlHints
+  /** Local guardrails config to enforce in the editor */
+  guardrails?: AccessControlConfig
 }
 
 export interface UseSqlEditorReturn {
@@ -37,6 +45,8 @@ export interface UseSqlEditorReturn {
   errors: ValidationError[]
   /** Last query result */
   results: QueryResult | null
+  /** Current query validation result against guardrails */
+  guardrailResult: AccessControlResult | null
   /** Whether a query is currently executing */
   isRunning: boolean
   /** Execute the current query */
@@ -51,19 +61,63 @@ export interface UseSqlEditorReturn {
   setDialect: (dialect: SqlDialect) => void
   /** Switch theme */
   setTheme: (theme: ThemePreset | ThemeConfig) => void
+  /** Access control hints (from backend, for UI display) */
+  accessHints: AccessControlHints | null
+  /** Quick check: is this editor in read-only mode? */
+  isReadOnly: boolean
+  /** Access mode label for display (e.g., "Read-only", "Write", "Full") */
+  accessModeLabel: string
+  /** Refresh access hints from the executor */
+  refreshAccessHints: () => Promise<void>
 }
 
 export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorReturn {
   const [sql, setSqlState] = useState(options.value ?? '')
   const [errors, setErrors] = useState<ValidationError[]>([])
   const [results, setResults] = useState<QueryResult | null>(null)
+  const [guardrailResult, setGuardrailResult] = useState<AccessControlResult | null>(null)
   const [isRunning, setIsRunning] = useState(false)
   const [editorInstance, setEditorInstance] = useState<SqlEditorInstance | null>(null)
+  const [accessHints, setAccessHints] = useState<AccessControlHints | null>(options.accessHints ?? null)
 
   const editorRef = useRef<SqlEditorInstance | null>(null)
   const containerElRef = useRef<HTMLDivElement | null>(null)
   const optionsRef = useRef(options)
   optionsRef.current = options
+
+  const refreshAccessHints = useCallback(async () => {
+    const executor = optionsRef.current.executor
+    if (executor && typeof executor === 'object' && 'getAccessHints' in executor) {
+      const adapter = executor as { getAccessHints?: () => Promise<AccessControlHints | null> }
+      try {
+        const hints = await adapter.getAccessHints?.()
+        if (hints) setAccessHints(hints)
+      } catch (e) {
+        console.error('Failed to fetch access hints:', e)
+      }
+    }
+  }, [])
+
+  // Fetch access hints from adapter if available
+  useEffect(() => {
+    if (options.accessHints) {
+      setAccessHints(options.accessHints)
+      return
+    }
+    refreshAccessHints()
+  }, [options.accessHints, refreshAccessHints])
+
+  // Re-validate guardrails when guardrails config changes
+  useEffect(() => {
+    if (options.guardrails && sql) {
+      try {
+        const res = validateAccessControl(sql, options.guardrails)
+        setGuardrailResult(res)
+      } catch (e) {
+        setGuardrailResult(null)
+      }
+    }
+  }, [options.guardrails, sql])
 
   const containerRef = useCallback((el: HTMLDivElement | null) => {
     if (containerElRef.current === el) return
@@ -90,19 +144,31 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
       maxHeight: opts.maxHeight,
       executor: opts.executor,
       validateDelay: opts.validateDelay,
-      onChange: (value) => {
+      guardrails: opts.guardrails,
+      onChange: (value: string) => {
         setSqlState(value)
         optionsRef.current.onChange?.(value)
+        
+        // Real-time guardrail validation
+        if (optionsRef.current.guardrails) {
+          try {
+            const res = validateAccessControl(value, optionsRef.current.guardrails)
+            setGuardrailResult(res)
+          } catch (e) {
+            // If SQL is invalid, we might not be able to classify it yet
+            setGuardrailResult(null)
+          }
+        }
       },
-      onValidate: (errs) => {
+      onValidate: (errs: ValidationError[]) => {
         setErrors(errs)
       },
-      onExecute: (_sql, result) => {
+      onExecute: (_sql: string, result: QueryResult) => {
         setResults(result)
       },
       onError: () => {
       },
-    })
+    } as any) // Cast as any because createSqlEditor now takes SqlEditorConfigWithGuardrails
 
     editorRef.current = instance
     setEditorInstance(instance)
@@ -115,7 +181,7 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
     }
   }, [])
 
-  const run = useCallback(async () => {
+  const run = useCallback(async (options?: { page?: number; pageSize?: number }) => {
     if (!editorRef.current) return undefined
     setIsRunning(true)
     try {
@@ -160,12 +226,17 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
     editorRef.current?.setTheme(theme)
   }, [])
 
+  // Compute derived values from accessHints
+  const isReadOnly = accessHints?.isReadOnly ?? options.readOnly ?? false
+  const accessModeLabel = getAccessModeLabel(accessHints?.mode ?? 'full')
+
   return {
     containerRef,
     editor: editorInstance,
     sql,
     errors,
     results,
+    guardrailResult,
     isRunning,
     run,
     cancel,
@@ -173,5 +244,28 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
     setSchema,
     setDialect,
     setTheme,
+    accessHints,
+    isReadOnly,
+    accessModeLabel,
+    refreshAccessHints,
+  }
+}
+
+/**
+ * Get human-readable label for access mode.
+ */
+function getAccessModeLabel(mode: AccessMode): string {
+  switch (mode) {
+    case 'read-only':
+      return 'Read-only'
+    case 'write':
+      return 'Write'
+    case 'update':
+      return 'Update'
+    case 'delete':
+      return 'Delete'
+    case 'full':
+    default:
+      return 'Full Access'
   }
 }

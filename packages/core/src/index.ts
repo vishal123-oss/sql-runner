@@ -8,6 +8,17 @@ export { buildTheme } from './theme'
 export { toCodeMirrorSchema, getTableNames, getAllColumns, getColumnsForTable } from './schema'
 export { exportToCSV, exportToJSON, exportToExcel, exportData, convertToCSV, convertToJSON, convertToExcel } from './export'
 
+// Access control exports
+export {
+  validateAccessControl,
+  classifySqlOperation,
+  isReadOperation,
+  isWriteOperation,
+  generateAccessHints,
+  createAccessConfig,
+  AccessPresets,
+} from './accessControl'
+
 export type {
   SqlDialect,
   SchemaDefinition,

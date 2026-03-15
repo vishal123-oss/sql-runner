@@ -1,9 +1,13 @@
-import type { DatabaseAdapter, QueryResult, SchemaDefinition } from '@vsql/core'
+import type { DatabaseAdapter, QueryResult, SchemaDefinition, AccessControlHints } from '@vsql/core'
 import { API_BASE_URL, API_KEY } from './config'
+
+let cachedAccessHints: AccessControlHints | null = null
 
 /**
  * Adapter that sends SQL to your backend. Your backend holds
  * the real database credentials and returns query results.
+ * 
+ * Includes access control guardrails from backend.
  */
 export const remoteDbAdapter: DatabaseAdapter = {
   async execute(sql: string): Promise<QueryResult> {
@@ -12,10 +16,13 @@ export const remoteDbAdapter: DatabaseAdapter = {
     }
     if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`
 
+    // Get current user from localStorage or default
+    const user = typeof window !== 'undefined' ? localStorage.getItem('vsql_user') || 'anonymous' : 'anonymous'
+
     const res = await fetch(`${API_BASE_URL}/api/query`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ sql }),
+      body: JSON.stringify({ sql, user }),
     })
 
     if (!res.ok) {
@@ -47,5 +54,25 @@ export const remoteDbAdapter: DatabaseAdapter = {
     const res = await fetch(`${API_BASE_URL}/api/schema`, { headers })
     if (!res.ok) return {}
     return res.json()
+  },
+
+  async getAccessHints(): Promise<AccessControlHints | null> {
+    // Return cached if available
+    if (cachedAccessHints) return cachedAccessHints
+
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      }
+      if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`
+
+      const res = await fetch(`${API_BASE_URL}/api/access-hints`, { headers })
+      if (!res.ok) return null
+
+      cachedAccessHints = await res.json()
+      return cachedAccessHints
+    } catch {
+      return null
+    }
   },
 }

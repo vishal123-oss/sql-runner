@@ -102,13 +102,21 @@ export function SqlResults({
     )
   }
 
+  // Show pagination UI if we have onPageChange (user wants pagination) or explicit pagination data
+  const hasPaginationData = data.pageSize != null && data.page != null && data.totalCount != null
+  const showPagination = onPageChange != null && (hasPaginationData || (data.rows.length > 0 && data.rowCount >= 0))
+  const effectivePageSize = data.pageSize ?? (data.rows.length > 0 ? data.rows.length : 10)
+  const effectivePage = data.page ?? 0
+  const effectiveTotalCount = data.totalCount ?? (data.rows.length > 0 ? data.rows.length : 0)
+  const totalPages = Math.ceil(effectiveTotalCount / effectivePageSize) || 1
+
   return (
     <div className={cls('vsql-results', className)} style={style}>
       {(showRowCount || showElapsed || showExport) && (
         <div style={styles.meta}>
           {showRowCount && (
             <span style={styles.badge}>
-              {data.rowCount} row{data.rowCount !== 1 ? 's' : ''}
+              {hasPaginationData ? `${effectiveTotalCount} total rows` : `${data.rowCount} row${data.rowCount !== 1 ? 's' : ''}`}
             </span>
           )}
           {showElapsed && data.elapsed != null && (
@@ -172,6 +180,91 @@ export function SqlResults({
           </tbody>
         </table>
       </div>
+
+      {showPagination && (paginationVariant === 'full' || paginationVariant === 'simple') && (
+        <div style={styles.footer}>
+          <div style={styles.pagination}>
+            <button
+              disabled={effectivePage === 0}
+              onClick={() => onPageChange?.(0, effectivePageSize)}
+              style={styles.pageBtn}
+              title="First Page"
+            >
+              &laquo;
+            </button>
+            <button
+              disabled={effectivePage === 0}
+              onClick={() => onPageChange?.(effectivePage - 1, effectivePageSize)}
+              style={styles.pageBtn}
+              title="Previous Page"
+            >
+              &lt;
+            </button>
+            
+            {paginationVariant === 'full' && (
+              <div style={styles.pageNumbers}>
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  let pageNum = i
+                  if (totalPages > 5) {
+                    if (effectivePage > 2) pageNum = effectivePage - 2 + i
+                    if (pageNum >= totalPages) pageNum = totalPages - 5 + i
+                    if (pageNum < 0) pageNum = i
+                  }
+                  
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => onPageChange?.(pageNum, effectivePageSize)}
+                      style={{
+                        ...styles.pageBtn,
+                        ...(effectivePage === pageNum ? styles.pageBtnActive : {})
+                      }}
+                    >
+                      {pageNum + 1}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
+            <span style={styles.pageInfo}>
+              Page {effectivePage + 1} of {totalPages}
+            </span>
+
+            <button
+              disabled={effectivePage >= totalPages - 1}
+              onClick={() => onPageChange?.(effectivePage + 1, effectivePageSize)}
+              style={styles.pageBtn}
+              title="Next Page"
+            >
+              &gt;
+            </button>
+            <button
+              disabled={effectivePage >= totalPages - 1}
+              onClick={() => onPageChange?.(totalPages - 1, effectivePageSize)}
+              style={styles.pageBtn}
+              title="Last Page"
+            >
+              &raquo;
+            </button>
+          </div>
+
+          {paginationVariant === 'full' && (
+            <div style={styles.pageSize}>
+              <span>Rows per page:</span>
+              <select
+                value={effectivePageSize}
+                onChange={(e) => onPageChange?.(0, parseInt(e.target.value))}
+                style={styles.pageSizeSelect}
+              >
+                {[10, 25, 50, 100].map(size => (
+                  <option key={size} value={size}>{size}</option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -316,5 +409,68 @@ const styles: Record<string, React.CSSProperties> = {
   rowEven: {},
   rowOdd: {
     backgroundColor: 'var(--vsql-row-alt, #f9fafb)',
+  },
+  footer: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '8px 12px',
+    borderTop: '1px solid var(--vsql-border, #e5e7eb)',
+    fontSize: '12px',
+    color: 'var(--vsql-muted, #6b7280)',
+    flexWrap: 'wrap',
+    gap: '12px',
+  },
+  pagination: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+  },
+  paginationCompact: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+  },
+  pageNumbers: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '2px',
+    margin: '0 8px',
+  },
+  pageBtn: {
+    padding: '4px 8px',
+    borderRadius: '4px',
+    border: '1px solid var(--vsql-border, #e5e7eb)',
+    backgroundColor: 'var(--vsql-bg, #fff)',
+    color: 'var(--vsql-fg, #374151)',
+    fontSize: '11px',
+    cursor: 'pointer',
+    minWidth: '28px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pageBtnActive: {
+    backgroundColor: 'var(--vsql-primary, #2563eb)',
+    color: '#fff',
+    borderColor: 'var(--vsql-primary, #2563eb)',
+  },
+  pageInfo: {
+    margin: '0 8px',
+    fontSize: '11px',
+  },
+  pageSize: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  pageSizeSelect: {
+    padding: '2px 4px',
+    borderRadius: '4px',
+    border: '1px solid var(--vsql-border, #e5e7eb)',
+    backgroundColor: 'var(--vsql-bg, #fff)',
+    color: 'var(--vsql-fg, #374151)',
+    fontSize: '11px',
+    cursor: 'pointer',
   },
 }

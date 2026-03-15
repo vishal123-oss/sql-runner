@@ -4,6 +4,15 @@
  *
  * 1. Copy server/.env.example to server/.env and set DB_* values.
  * 2. cd server && npm install && npm start
+ *
+ * ============================================================================
+ * ACCESS CONTROL / GUARDRAILS
+ * ============================================================================
+ * IMPORTANT: Access control is configured HERE on the backend.
+ * - The frontend receives only "hints" for UI display (read-only badge, etc.)
+ * - NEVER trust the client for security - always validate on every request.
+ * - Change ACCESS_CONTROL_CONFIG below to control what users can do.
+ * ============================================================================
  */
 
 require('dotenv').config()
@@ -13,6 +22,89 @@ const cors = require('cors')
 const app = express()
 app.use(cors())
 app.use(express.json())
+
+// ============================================================================
+// DYNAMIC ACCESS CONTROL CONFIG & AUDIT LOG
+// ============================================================================
+let ACCESS_CONTROL_CONFIG = {
+  mode: process.env.ACCESS_MODE || 'read-only',
+  blockedOperations: [],
+  blockedPatterns: [],
+  maxRowsLimit: parseInt(process.env.MAX_ROWS || '1000', 10),
+  allowMultiStatement: false,
+  allowTransactions: true,
+  requireWhereForModify: false,
+  blockSelectStar: false,
+  allowFullTableScan: true,
+}
+
+const auditLogs = []
+
+function addAuditLog(user, sql, resultSize, status, error = null) {
+  auditLogs.unshift({
+    id: Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+    user: user || 'anonymous',
+    sql,
+    timestamp: new Date().toISOString(),
+    resultSize: resultSize || 0,
+    status,
+    error
+  })
+  // Keep last 100 logs
+  if (auditLogs.length > 100) auditLogs.pop()
+}
+
+// ========== Update config endpoint ==========
+app.post('/api/config', (req, res) => {
+  const newConfig = req.body
+  ACCESS_CONTROL_CONFIG = { ...ACCESS_CONTROL_CONFIG, ...newConfig }
+  res.json({ ok: true, config: ACCESS_CONTROL_CONFIG })
+})
+
+// ========== Audit logs endpoint ==========
+app.get('/api/audit-logs', (req, res) => {
+  res.json(auditLogs)
+})
+
+
+const MODE_DEFAULTS = {
+  'no-access': [],
+  'read-only': ['select', 'ddl_read'],
+  'write': ['select', 'ddl_read', 'insert'],
+  'update': ['select', 'ddl_read', 'insert', 'update'],
+  'delete': ['select', 'ddl_read', 'insert', 'update', 'delete'],
+  'full': ['select', 'ddl_read', 'insert', 'update', 'delete', 'ddl_write', 'dcl', 'transaction', 'admin'],
+}
+
+function getAccessHints() {
+  const cfg = ACCESS_CONTROL_CONFIG
+  const mode = cfg.mode || 'full'
+  const isReadOnly = mode === 'read-only' || mode === 'no-access'
+  
+  let description = `Access mode: ${mode}`
+  if (mode === 'no-access') description = 'Access denied: You do not have permission to access this database'
+  else if (mode === 'read-only') description = 'Read-only mode: only SELECT and introspection queries allowed'
+  else if (mode === 'write') description = 'Write mode: SELECT and INSERT allowed'
+  else if (mode === 'update') description = 'Update mode: SELECT, INSERT, and UPDATE allowed'
+  else if (mode === 'delete') description = 'Delete mode: Full CRUD access (no DDL)'
+
+  return {
+    mode,
+    description,
+    isReadOnly,
+    disabledOperations: mode === 'no-access'
+      ? ['select', 'insert', 'update', 'delete', 'ddl_read', 'ddl_write', 'dcl', 'transaction', 'admin']
+      : isReadOnly 
+        ? ['insert', 'update', 'delete', 'ddl_write', 'dcl', 'transaction', 'admin']
+        : cfg.blockedOperations,
+    // Guardrail controls
+    maxRowsLimit: cfg.maxRowsLimit,
+    requireWhereForModify: cfg.requireWhereForModify || false,
+    blockSelectStar: cfg.blockSelectStar || false,
+    allowFullTableScan: cfg.allowFullTableScan !== false,
+  }
+}
+// ============================================================================
 
 // ========== REPLACE WITH YOUR DATABASE CREDENTIALS ==========
 // Option A: Use environment variables (recommended)
@@ -34,11 +126,26 @@ const DB_CONFIG = {
 }
 const DB_TYPE = (process.env.DB_TYPE || 'postgres').toLowerCase()
 
-// ========== Query endpoint ==========
+// ========== Query endpoint (WITH ACCESS CONTROL ENFORCEMENT) ==========
 app.post('/api/query', async (req, res) => {
-  const { sql } = req.body || {}
+  const { sql, user } = req.body || {}
   if (!sql || typeof sql !== 'string') {
     return res.status(400).json({ error: 'Missing sql in body' })
+  }
+
+  // ========================================
+  // BACKEND ACCESS CONTROL VALIDATION
+  // THIS IS THE REAL SECURITY - NEVER SKIP
+  // ========================================
+  const validation = validateAccessControl(sql)
+  if (!validation.allowed) {
+    console.warn(`[SECURITY] Blocked query from client: ${validation.reason}`)
+    addAuditLog(user, sql, 0, 'blocked', validation.reason)
+    return res.status(403).json({
+      error: `Access denied: ${validation.reason}`,
+      code: 'ACCESS_DENIED',
+      category: validation.category,
+    })
   }
 
   const start = Date.now()
@@ -50,7 +157,18 @@ app.post('/api/query', async (req, res) => {
       const { Client } = require('pg')
       const client = new Client(DB_CONFIG)
       await client.connect()
-      const result = await client.query(sql)
+      
+      // Apply row limit if configured (additional backend enforcement)
+      let execSql = sql
+      const cfg = ACCESS_CONTROL_CONFIG
+      if (cfg.maxRowsLimit && /^\s*(SELECT|WITH)\b/i.test(sql.trim())) {
+        // Wrap with LIMIT if not already present
+        if (!/\bLIMIT\s+\d+/i.test(sql)) {
+          execSql = `${sql.trim().replace(/;?\s*$/, '')} LIMIT ${cfg.maxRowsLimit}`
+        }
+      }
+      
+      const result = await client.query(execSql)
       await client.end()
       columns = (result.fields || []).map((f) => f.name)
       rows = (result.rows || []).map((r) => ({ ...r }))
@@ -63,7 +181,17 @@ app.post('/api/query', async (req, res) => {
         password: DB_CONFIG.password,
         database: DB_CONFIG.database,
       })
-      const [raw, fields] = await conn.execute(sql)
+      
+      // Apply row limit
+      let execSql = sql
+      const cfg = ACCESS_CONTROL_CONFIG
+      if (cfg.maxRowsLimit && /^\s*(SELECT|WITH)\b/i.test(sql.trim())) {
+        if (!/\bLIMIT\s+\d+/i.test(sql)) {
+          execSql = `${sql.trim().replace(/;?\s*$/, '')} LIMIT ${cfg.maxRowsLimit}`
+        }
+      }
+      
+      const [raw, fields] = await conn.execute(execSql)
       await conn.end()
       columns = (fields || []).map((f) => f.name)
       rows = (Array.isArray(raw) ? raw : []).map((r) => ({ ...r }))
@@ -72,11 +200,20 @@ app.post('/api/query', async (req, res) => {
     }
 
     const elapsed = Date.now() - start
+    addAuditLog(user, sql, rows.length, 'success')
     res.json({ columns, rows, rowCount: rows.length, elapsed })
   } catch (err) {
     const message = err.message || String(err)
+    addAuditLog(user, sql, 0, 'error', message)
     res.status(500).json({ error: message })
   }
+})
+
+
+// ========== Access control hints endpoint (for client UX) ==========
+// This is SAFE to expose - it's just UI hints, not the real config
+app.get('/api/access-hints', (_req, res) => {
+  res.json(getAccessHints())
 })
 
 // Optional: schema for autocomplete

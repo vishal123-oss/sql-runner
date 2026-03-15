@@ -1,4 +1,5 @@
-import type { DatabaseAdapter, QueryResult, SchemaDefinition } from './types'
+import type { DatabaseAdapter, QueryResult, SchemaDefinition, AccessControlHints, AccessControlConfig } from './types'
+import { createAccessControlledAdapter } from './executor'
 
 /**
  * Config for the remote executor adapter.
@@ -15,19 +16,37 @@ export interface RemoteExecutorConfig {
   queryPath?: string
   /** Path for schema (default: /api/schema) */
   schemaPath?: string
+  /** Path for access control hints (default: /api/access-hints) */
+  accessHintsPath?: string
+  /** Optional: Access control hints from backend (for UX only, not security) */
+  accessHints?: AccessControlHints
+  /** Optional: Full access control config (backend only - DO NOT send to client) */
+  accessConfig?: AccessControlConfig
 }
 
 /**
  * Create a DatabaseAdapter that calls your backend API.
  * Use this in your parent app and pass the result as executor to useSqlEditor / createSqlEditor.
  *
+ * SECURITY: Access control is configured on backend. Client receives only "hints" for UX.
+ * The backend MUST validate every query against its own AccessControlConfig.
+ *
  * @example
  * // In your parent app (e.g. Next.js, CRA):
  * const adapter = createRemoteAdapter({
  *   apiUrl: process.env.NEXT_PUBLIC_SQL_API_URL ?? 'http://localhost:3001',
  *   apiKey: process.env.NEXT_PUBLIC_SQL_API_KEY,
+ *   // Backend sends hints via /api/access-hints (optional)
  * })
  * useSqlEditor({ executor: adapter, dialect: 'postgresql', ... })
+ *
+ * @example
+ * // Backend: Fetch hints and pass to client
+ * const hints = await fetchAccessHints() // from your backend's config
+ * const adapter = createRemoteAdapter({
+ *   apiUrl: 'https://api.example.com',
+ *   accessHints: hints, // for UX only
+ * })
  */
 export function createRemoteAdapter(config: RemoteExecutorConfig): DatabaseAdapter {
   const {
@@ -36,13 +55,19 @@ export function createRemoteAdapter(config: RemoteExecutorConfig): DatabaseAdapt
     headers: customHeaders = {},
     queryPath = '/api/query',
     schemaPath = '/api/schema',
+    accessHintsPath = '/api/access-hints',
+    accessHints: providedHints,
+    accessConfig: providedConfig,
   } = config
 
   const baseHeaders: Record<string, string> = { ...customHeaders }
   if (apiKey) baseHeaders['Authorization'] = `Bearer ${apiKey}`
   baseHeaders['Content-Type'] = 'application/json'
 
-  const adapter: DatabaseAdapter = {
+  let cachedHints: AccessControlHints | null = providedHints ?? null
+
+  // Base adapter that talks to backend
+  const baseAdapter: DatabaseAdapter = {
     async execute(sql: string): Promise<QueryResult> {
       const url = `${apiUrl.replace(/\/$/, '')}${queryPath}`
       const res = await fetch(url, {
@@ -70,7 +95,26 @@ export function createRemoteAdapter(config: RemoteExecutorConfig): DatabaseAdapt
       if (!res.ok) return {}
       return res.json()
     },
+
+    async getAccessHints(): Promise<AccessControlHints | null> {
+      if (cachedHints) return cachedHints
+      try {
+        const url = `${apiUrl.replace(/\/$/, '')}${accessHintsPath}`
+        const res = await fetch(url, { headers: baseHeaders })
+        if (res.ok) {
+          cachedHints = await res.json()
+          return cachedHints
+        }
+      } catch {
+        // Silently fail - hints are optional
+      }
+      return null
+    },
   }
 
-  return adapter
+  // Always wrap with access control to support async hint fetching and local enforcement
+  return createAccessControlledAdapter(baseAdapter, {
+    config: providedConfig,
+    hints: providedHints,
+  })
 }

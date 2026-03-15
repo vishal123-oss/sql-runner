@@ -1,4 +1,5 @@
-import type { DatabaseAdapter, QueryResult, QueryResultColumn } from './types'
+import type { DatabaseAdapter, QueryResult, QueryResultColumn, AccessControlConfig, AccessControlHints } from './types'
+import { validateAccessControl, generateAccessHints } from './accessControl'
 
 // ---------------------------------------------------------------------------
 // Local executor (sql.js — SQLite compiled to WebAssembly)
@@ -94,7 +95,17 @@ export class LocalExecutor implements DatabaseAdapter {
       // For local SQLite, we simulate cancellation by checking periodically
       // Note: sql.js doesn't support true async cancellation, so we check at key points
       if (isSelect) {
-        const stmt = this.db.prepare(trimmed)
+        let finalSql = trimmed
+        const { page, pageSize } = options || {}
+
+        if (pageSize != null && page != null) {
+          // Remove trailing semicolon if present before appending LIMIT/OFFSET
+          const sqlWithoutSemicolon = trimmed.replace(/;\s*$/, '')
+          // Add LIMIT and OFFSET for pagination (SQLite style)
+          finalSql = `${sqlWithoutSemicolon} LIMIT ${pageSize} OFFSET ${page * pageSize};`
+        }
+
+        const stmt = this.db.prepare(finalSql)
         const colNames: string[] = stmt.getColumnNames()
         const rawRows: any[][] = []
         
@@ -121,7 +132,16 @@ export class LocalExecutor implements DatabaseAdapter {
           return obj
         })
 
-        return { columns, rows, rowCount: rows.length, elapsed, sql }
+        return {
+          columns,
+          rows,
+          rowCount: rows.length,
+          totalCount,
+          page,
+          pageSize,
+          elapsed,
+          sql: finalSql
+        }
       }
 
       // For non-SELECT queries
@@ -137,7 +157,7 @@ export class LocalExecutor implements DatabaseAdapter {
         rows: [],
         rowCount: 0,
         elapsed,
-        sql,
+        sql: trimmed,
       }
     } catch (e: any) {
       if (e instanceof QueryCancelledError) {
@@ -233,7 +253,7 @@ export class AdapterExecutor {
     }
     
     result.elapsed = result.elapsed ?? Math.round(performance.now() - start)
-    result.sql = sql
+    result.sql = result.sql ?? sql
     return result
   }
 
@@ -244,5 +264,30 @@ export class AdapterExecutor {
   destroy(): void {
     this.cancel()
     this.adapter.destroy?.()
+  }
+}
+
+/**
+ * Create an access-controlled adapter wrapper.
+ *
+ * @param adapter - The underlying adapter (local or remote)
+ * @param options - Config (for enforcement) or hints (for UX)
+ * @returns A DatabaseAdapter with access control
+ */
+export function createAccessControlledAdapter(
+  adapter: DatabaseAdapter,
+  options: {
+    /** Full access control config (backend only - do NOT send to client) */
+    config?: AccessControlConfig
+    /** Hints for UI (safe to send from backend to client) */
+    hints?: AccessControlHints
+  } = {},
+): DatabaseAdapter {
+  const controlled = new AccessControlledExecutor(adapter, options)
+  return {
+    execute: (sql, opts) => controlled.execute(sql, opts),
+    getSchema: () => controlled.getSchema(),
+    destroy: () => controlled.destroy(),
+    getAccessHints: () => controlled.getAccessHints(),
   }
 }

@@ -45,6 +45,12 @@ export interface QueryResult {
   columns: QueryResultColumn[]
   rows: Record<string, unknown>[]
   rowCount: number
+  /** Total number of rows available (for pagination) */
+  totalCount?: number
+  /** Current page (0-based) */
+  page?: number
+  /** Rows per page */
+  pageSize?: number
   /** Elapsed time in milliseconds */
   elapsed?: number
   /** The SQL statement that produced this result */
@@ -67,6 +73,87 @@ export interface ValidationError {
 }
 
 // ---------------------------------------------------------------------------
+// Access Control Types (for guardrails from backend)
+// ---------------------------------------------------------------------------
+
+/**
+ * SQL operation categories for access control classification.
+ * Each category maps to one or more SQL statements.
+ */
+export type SqlOperationCategory =
+  | 'select'        // SELECT, WITH (CTEs that select), PRAGMA (sqlite), SHOW
+  | 'insert'        // INSERT, COPY (import), LOAD DATA
+  | 'update'        // UPDATE
+  | 'delete'        // DELETE, TRUNCATE
+  | 'ddl_read'      // DESCRIBE, EXPLAIN, SHOW TABLES
+  | 'ddl_write'     // CREATE, ALTER, DROP (tables, views, indexes)
+  | 'dcl'           // GRANT, REVOKE, LOCK, UNLOCK
+  | 'transaction'   // BEGIN, COMMIT, ROLLBACK, SAVEPOINT
+  | 'admin'         // SET, USE, ANALYZE, VACUUM, REINDEX
+  | 'unknown'       // Cannot classify
+
+/**
+ * Access control mode - predefined permission sets.
+ */
+export type AccessMode =
+  | 'no-access'   // Block ALL operations
+  | 'read-only'   // SELECT, WITH, PRAGMA, SHOW, DESCRIBE, EXPLAIN only
+  | 'write'       // Above + INSERT, CREATE TABLE, COPY
+  | 'update'      // Above + UPDATE
+  | 'delete'      // Above + DELETE, TRUNCATE, DROP
+  | 'full'        // All operations allowed
+
+/**
+ * Access control configuration (backend-owned, client gets hints only).
+ */
+export interface AccessControlConfig {
+  mode?: AccessMode
+  allowedOperations?: SqlOperationCategory[]
+  blockedOperations?: SqlOperationCategory[]
+  blockedPatterns?: string[]
+  maxRowsLimit?: number
+  allowMultiStatement?: boolean
+  allowTransactions?: boolean
+  /** Require WHERE clause for UPDATE/DELETE (prevent full table scan) */
+  requireWhereForModify?: boolean
+  /** Maximum query execution time in ms */
+  maxExecutionTimeMs?: number
+  /** Block SELECT * queries */
+  blockSelectStar?: boolean
+  /** Allow full table scans */
+  allowFullTableScan?: boolean
+}
+
+/**
+ * Hints sent to client for UX only (NOT for security).
+ * Full config stays on backend.
+ */
+export interface AccessControlHints {
+  mode?: AccessMode
+  disabledOperations?: SqlOperationCategory[]
+  description?: string
+  isReadOnly?: boolean
+  /** Max rows returned per query */
+  maxRowsLimit?: number
+  /** Require WHERE for modifications */
+  requireWhereForModify?: boolean
+  /** Block SELECT * */
+  blockSelectStar?: boolean
+  /** Allow full table scans */
+  allowFullTableScan?: boolean
+}
+
+/**
+ * Result of access control validation.
+ */
+export interface AccessControlResult {
+  allowed: boolean
+  reason?: string
+  category: SqlOperationCategory
+  appliedMode: AccessMode
+}
+
+// ---------------------------------------------------------------------------
 // Database adapter (for remote / custom backends)
 // ---------------------------------------------------------------------------
 
@@ -79,6 +166,8 @@ export interface DatabaseAdapter {
   getSchema?(): Promise<SchemaDefinition>
   /** Optional: cleanup. */
   destroy?(): void
+  /** Optional: access control hints for UI (not for security - backend enforces). */
+  getAccessHints?(): Promise<AccessControlHints | null>
 }
 
 // ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ import type {
   ValidationError,
   QueryResult,
   DatabaseAdapter,
+  AccessControlConfig,
 } from './types'
 
 import { buildTheme } from './theme'
@@ -47,11 +48,22 @@ function getDialectConfig(dialect: SqlDialect) {
   }
 }
 
+/**
+ * Extended editor config with guardrails.
+ */
+export interface SqlEditorConfigWithGuardrails extends SqlEditorConfig {
+  /**
+   * Access control guardrails.
+   * If provided, the editor will enforce these rules locally.
+   */
+  guardrails?: AccessControlConfig
+}
+
 // ---------------------------------------------------------------------------
 // createSqlEditor — the main factory
 // ---------------------------------------------------------------------------
 
-export function createSqlEditor(config: SqlEditorConfig): SqlEditorInstance {
+export function createSqlEditor(config: SqlEditorConfigWithGuardrails): SqlEditorInstance {
   const {
     container,
     dialect = 'standard',
@@ -70,6 +82,7 @@ export function createSqlEditor(config: SqlEditorConfig): SqlEditorInstance {
     onExecute,
     onError,
     onChange,
+    guardrails,
   } = config
 
   // --- Compartments for reconfigurable extensions ---
@@ -88,10 +101,18 @@ export function createSqlEditor(config: SqlEditorConfig): SqlEditorInstance {
 
   // --- Initialize executor ---
   if (executor === 'local') {
-    localExecutor = new LocalExecutor()
-    localExecutor.init().catch(() => {})
+    let local = new LocalExecutor() as DatabaseAdapter
+    if (guardrails) {
+      local = createAccessControlledAdapter(local, { config: guardrails })
+    }
+    activeExecutor = local
+    ;(local as any).init?.().catch(() => {})
   } else if (executor !== 'none') {
-    adapterExecutor = new AdapterExecutor(executor as DatabaseAdapter)
+    let adapter = executor as DatabaseAdapter
+    if (guardrails) {
+      adapter = createAccessControlledAdapter(adapter, { config: guardrails })
+    }
+    activeExecutor = adapter
   }
 
   // --- Build SQL language extension ---
@@ -120,15 +141,8 @@ export function createSqlEditor(config: SqlEditorConfig): SqlEditorInstance {
     if (!sqlText) return false
 
     try {
-      let result: QueryResult | undefined
-
-      if (localExecutor) {
-        result = await localExecutor.execute(sqlText)
-      } else if (adapterExecutor) {
-        result = await adapterExecutor.execute(sqlText)
-      }
-
-      if (result) {
+      if (activeExecutor) {
+        const result = await activeExecutor.execute(sqlText)
         onExecute?.(sqlText, result)
       }
     } catch (e: any) {
@@ -207,8 +221,8 @@ export function createSqlEditor(config: SqlEditorConfig): SqlEditorInstance {
   })
 
   // --- Instance methods ---
-  const instance: SqlEditorInstance = {
-    async run() {
+  const instance: SqlEditorInstance & { run(opts?: { page?: number; pageSize?: number }): Promise<QueryResult | undefined> } = {
+    async run(opts?: { page?: number; pageSize?: number }) {
       const sqlText = view.state.doc.toString().trim()
       if (!sqlText) return undefined
 
@@ -229,8 +243,7 @@ export function createSqlEditor(config: SqlEditorConfig): SqlEditorInstance {
         } else if (adapterExecutor) {
           result = await adapterExecutor.execute(sqlText, signal)
         }
-        if (result) onExecute?.(sqlText, result)
-        return result
+        return undefined
       } catch (e: any) {
         // Don't propagate cancellation errors to onError callback
         if (e instanceof QueryCancelledError || e.name === 'QueryCancelledError') {
@@ -306,17 +319,22 @@ export function createSqlEditor(config: SqlEditorConfig): SqlEditorInstance {
     },
 
     async loadData(tableName, columns, rows) {
-      if (!localExecutor) {
+      if (executor !== 'local') {
         throw new Error(
           'loadData() requires executor: "local". Set executor to "local" in config.',
         )
       }
-      await localExecutor.loadData(tableName, columns, rows)
+      // Note: we can't easily access the underlying local executor if it's wrapped
+      // but for demo/internal use we assume it's there
+      if ((activeExecutor as any).loadData) {
+        await (activeExecutor as any).loadData(tableName, columns, rows)
+      } else if ((activeExecutor as any).adapter?.loadData) {
+        await (activeExecutor as any).adapter.loadData(tableName, columns, rows)
+      }
     },
 
     async execRaw(rawSql: string) {
-      if (localExecutor) return localExecutor.execute(rawSql)
-      if (adapterExecutor) return adapterExecutor.execute(rawSql)
+      if (activeExecutor) return activeExecutor.execute(rawSql)
       throw new Error('No executor configured. Set executor to "local" or provide a DatabaseAdapter.')
     },
 
@@ -331,8 +349,7 @@ export function createSqlEditor(config: SqlEditorConfig): SqlEditorInstance {
         currentAbortController = null
       }
       view.destroy()
-      localExecutor?.destroy()
-      adapterExecutor?.destroy()
+      activeExecutor?.destroy?.()
     },
   }
 
