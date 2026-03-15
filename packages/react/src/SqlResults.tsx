@@ -1,4 +1,6 @@
-import type { QueryResult } from '@vsql/core'
+import { useState, useRef, useEffect } from 'react'
+import type { QueryResult, ExportOptions, ExportResult, ExportFormat } from '@vsql/core'
+import { exportData } from '@vsql/core'
 
 export interface SqlResultsProps {
   /** Query result data to display */
@@ -15,11 +17,27 @@ export interface SqlResultsProps {
   showElapsed?: boolean
   /** Empty state message */
   emptyMessage?: string
-  /** Callback for page change */
-  onPageChange?: (page: number, pageSize: number) => void
-  /** Pagination UI variant: 'simple' | 'full' | 'compact' */
-  paginationVariant?: 'simple' | 'full' | 'compact'
+  /** Show export button */
+  showExport?: boolean
+  /** Export button text */
+  exportButtonText?: string
+  /** Export options (filename, delimiter, etc.) */
+  exportOptions?: ExportOptions
+  /** Callback when export completes */
+  onExport?: (result: ExportResult) => void
 }
+
+interface ExportFormatOption {
+  format: ExportFormat
+  label: string
+  extension: string
+}
+
+const EXPORT_FORMATS: ExportFormatOption[] = [
+  { format: 'csv', label: 'CSV', extension: '.csv' },
+  { format: 'json', label: 'JSON', extension: '.json' },
+  { format: 'xlsx', label: 'Excel', extension: '.xls' },
+]
 
 export function SqlResults({
   data,
@@ -29,9 +47,40 @@ export function SqlResults({
   showRowCount = true,
   showElapsed = true,
   emptyMessage = 'Run a query to see results',
-  onPageChange,
-  paginationVariant = 'full',
+  showExport = false,
+  exportButtonText = 'Export',
+  exportOptions,
+  onExport,
 }: SqlResultsProps) {
+  const [dropdownOpen, setDropdownOpen] = useState(false)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setDropdownOpen(false)
+      }
+    }
+
+    if (dropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [dropdownOpen])
+
+  const handleExport = (format: ExportFormat) => {
+    if (!data) return
+    const result = exportData(data, { ...exportOptions, format })
+    onExport?.(result)
+    setDropdownOpen(false)
+  }
+
+  const canExport = data && data.columns.length > 0 && data.rows.length > 0
+
   if (!data) {
     return (
       <div className={cls('vsql-results vsql-results--empty', className)} style={style}>
@@ -63,7 +112,7 @@ export function SqlResults({
 
   return (
     <div className={cls('vsql-results', className)} style={style}>
-      {(showRowCount || showElapsed || showPagination) && (
+      {(showRowCount || showElapsed || showExport) && (
         <div style={styles.meta}>
           {showRowCount && (
             <span style={styles.badge}>
@@ -73,26 +122,35 @@ export function SqlResults({
           {showElapsed && data.elapsed != null && (
             <span style={styles.elapsed}>{data.elapsed}ms</span>
           )}
-          <div style={{ flex: 1 }} />
-          {showPagination && paginationVariant === 'compact' && (
-            <div style={styles.paginationCompact}>
+          {showExport && (
+            <div ref={dropdownRef} style={styles.exportContainer}>
               <button
-                disabled={effectivePage === 0}
-                onClick={() => onPageChange?.(effectivePage - 1, effectivePageSize)}
-                style={styles.pageBtn}
+                onClick={() => setDropdownOpen(!dropdownOpen)}
+                disabled={!canExport}
+                style={{
+                  ...styles.exportBtn,
+                  opacity: canExport ? 1 : 0.5,
+                  cursor: canExport ? 'pointer' : 'not-allowed',
+                }}
               >
-                &lt;
+                {exportButtonText}
+                <span style={styles.exportArrow}>▼</span>
               </button>
-              <span style={styles.pageInfo}>
-                {effectivePage + 1} / {totalPages}
-              </span>
-              <button
-                disabled={effectivePage >= totalPages - 1}
-                onClick={() => onPageChange?.(effectivePage + 1, effectivePageSize)}
-                style={styles.pageBtn}
-              >
-                &gt;
-              </button>
+              {dropdownOpen && canExport && (
+                <div style={styles.dropdown}>
+                  {EXPORT_FORMATS.map((option) => (
+                    <button
+                      key={option.format}
+                      onClick={() => handleExport(option.format)}
+                      style={styles.dropdownItem}
+                    >
+                      <span style={styles.dropdownIcon}>{getFormatIcon(option.format)}</span>
+                      {option.label}
+                      <span style={styles.dropdownExtension}>{option.extension}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -221,6 +279,19 @@ function formatCell(value: unknown): string {
   return String(value)
 }
 
+function getFormatIcon(format: ExportFormat): string {
+  switch (format) {
+    case 'csv':
+      return '📄'
+    case 'json':
+      return '📋'
+    case 'xlsx':
+      return '📊'
+    default:
+      return '📄'
+  }
+}
+
 const styles: Record<string, React.CSSProperties> = {
   empty: {
     margin: 0,
@@ -248,6 +319,61 @@ const styles: Record<string, React.CSSProperties> = {
   elapsed: {
     color: 'var(--vsql-muted, #9ca3af)',
     fontSize: '12px',
+  },
+  exportContainer: {
+    marginLeft: 'auto',
+    position: 'relative',
+  },
+  exportBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '4px 12px',
+    borderRadius: '6px',
+    border: '1px solid var(--vsql-border, #e5e7eb)',
+    backgroundColor: 'var(--vsql-export-bg, #2563eb)',
+    color: 'var(--vsql-export-fg, #fff)',
+    fontSize: '12px',
+    fontWeight: 500,
+  },
+  exportArrow: {
+    fontSize: '10px',
+    opacity: 0.7,
+  },
+  dropdown: {
+    position: 'absolute',
+    top: '100%',
+    right: 0,
+    marginTop: '4px',
+    minWidth: '140px',
+    backgroundColor: 'var(--vsql-dropdown-bg, #fff)',
+    border: '1px solid var(--vsql-border, #e5e7eb)',
+    borderRadius: '8px',
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+    overflow: 'hidden',
+    zIndex: 1000,
+  },
+  dropdownItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    width: '100%',
+    padding: '10px 14px',
+    border: 'none',
+    backgroundColor: 'transparent',
+    color: 'var(--vsql-dropdown-fg, #1e1e1e)',
+    fontSize: '13px',
+    textAlign: 'left',
+    cursor: 'pointer',
+    transition: 'background-color 0.15s',
+  },
+  dropdownIcon: {
+    fontSize: '14px',
+  },
+  dropdownExtension: {
+    marginLeft: 'auto',
+    fontSize: '11px',
+    color: 'var(--vsql-muted, #9ca3af)',
   },
   scroll: {
     overflow: 'auto',

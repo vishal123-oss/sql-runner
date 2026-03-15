@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
 import {
   createSqlEditor,
-  validateAccessControl,
+  QueryCancelledError,
   type SqlEditorConfig,
   type SqlEditorInstance,
   type QueryResult,
@@ -50,7 +50,9 @@ export interface UseSqlEditorReturn {
   /** Whether a query is currently executing */
   isRunning: boolean
   /** Execute the current query */
-  run: (options?: { page?: number; pageSize?: number }) => Promise<QueryResult | undefined>
+  run: () => Promise<QueryResult | undefined>
+  /** Cancel the currently running query */
+  cancel: () => void
   /** Set the SQL content */
   setSql: (value: string) => void
   /** Update schema dynamically */
@@ -183,12 +185,26 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
     if (!editorRef.current) return undefined
     setIsRunning(true)
     try {
-      const result = await (editorRef.current as any).run(options)
-      setResults(result ?? null)
+      const result = await editorRef.current.run()
+      // result will be undefined if cancelled
+      if (result !== undefined) {
+        setResults(result)
+      }
       return result
     } catch (err) {
+      // Don't throw cancellation errors
+      if (err instanceof QueryCancelledError || (err as any)?.name === 'QueryCancelledError') {
+        return undefined
+      }
       throw err
     } finally {
+      setIsRunning(false)
+    }
+  }, [])
+
+  const cancel = useCallback(() => {
+    if (editorRef.current) {
+      editorRef.current.cancel()
       setIsRunning(false)
     }
   }, [])
@@ -223,6 +239,7 @@ export function useSqlEditor(options: UseSqlEditorOptions = {}): UseSqlEditorRet
     guardrailResult,
     isRunning,
     run,
+    cancel,
     setSql,
     setSchema,
     setDialect,

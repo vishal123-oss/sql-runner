@@ -23,7 +23,7 @@ import type {
 import { buildTheme } from './theme'
 import { toCodeMirrorSchema } from './schema'
 import { validateSql, createSqlLinter } from './validator'
-import { LocalExecutor, AdapterExecutor, createAccessControlledAdapter } from './executor'
+import { LocalExecutor, AdapterExecutor, QueryCancelledError } from './executor'
 import { sqlFunctionCompletions } from './completions'
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,10 @@ export function createSqlEditor(config: SqlEditorConfigWithGuardrails): SqlEdito
   // --- Mutable state ---
   let currentDialect: SqlDialect = dialect
   let currentSchema: SchemaDefinition = schema
-  let activeExecutor: DatabaseAdapter | null = null
+  let localExecutor: LocalExecutor | null = null
+  let adapterExecutor: AdapterExecutor | null = null
+  let currentAbortController: AbortController | null = null
+  let isExecuting: boolean = false
 
   // --- Initialize executor ---
   if (executor === 'local') {
@@ -223,18 +226,50 @@ export function createSqlEditor(config: SqlEditorConfigWithGuardrails): SqlEdito
       const sqlText = view.state.doc.toString().trim()
       if (!sqlText) return undefined
 
+      // Cancel any previous running query
+      if (currentAbortController) {
+        currentAbortController.abort()
+      }
+
+      // Create new abort controller for this query
+      currentAbortController = new AbortController()
+      const signal = currentAbortController.signal
+      isExecuting = true
+
       try {
-        if (activeExecutor) {
-          const result = await activeExecutor.execute(sqlText, opts)
-          onExecute?.(sqlText, result)
-          return result
+        let result: QueryResult | undefined
+        if (localExecutor) {
+          result = await localExecutor.execute(sqlText, signal)
+        } else if (adapterExecutor) {
+          result = await adapterExecutor.execute(sqlText, signal)
         }
         return undefined
       } catch (e: any) {
+        // Don't propagate cancellation errors to onError callback
+        if (e instanceof QueryCancelledError || e.name === 'QueryCancelledError') {
+          return undefined
+        }
         const error = e instanceof Error ? e : new Error(String(e))
         onError?.(error, sqlText)
         throw error
+      } finally {
+        currentAbortController = null
+        isExecuting = false
       }
+    },
+
+    cancel() {
+      if (currentAbortController) {
+        currentAbortController.abort()
+        currentAbortController = null
+      }
+      if (localExecutor) {
+        localExecutor.cancel()
+      }
+      if (adapterExecutor) {
+        adapterExecutor.cancel()
+      }
+      isExecuting = false
     },
 
     validate() {
@@ -308,6 +343,11 @@ export function createSqlEditor(config: SqlEditorConfigWithGuardrails): SqlEdito
     },
 
     destroy() {
+      // Cancel any running query
+      if (currentAbortController) {
+        currentAbortController.abort()
+        currentAbortController = null
+      }
       view.destroy()
       activeExecutor?.destroy?.()
     },

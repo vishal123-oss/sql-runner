@@ -40,9 +40,20 @@ function loadSqlJs(): Promise<any> {
   return sqlJsPromise
 }
 
+/**
+ * Error thrown when a query is cancelled
+ */
+export class QueryCancelledError extends Error {
+  constructor(message: string = 'Query was cancelled') {
+    super(message)
+    this.name = 'QueryCancelledError'
+  }
+}
+
 export class LocalExecutor implements DatabaseAdapter {
   private db: any = null
   private initPromise: Promise<void> | null = null
+  private currentAbortController: AbortController | null = null
 
   constructor(wasmUrl?: string) {
     if (wasmUrl) configureSqlJsWasm(wasmUrl)
@@ -58,14 +69,31 @@ export class LocalExecutor implements DatabaseAdapter {
     return this.initPromise
   }
 
-  async execute(sql: string, options?: { page?: number; pageSize?: number }): Promise<QueryResult> {
+  /**
+   * Cancel the currently running query
+   */
+  cancel(): void {
+    if (this.currentAbortController) {
+      this.currentAbortController.abort()
+      this.currentAbortController = null
+    }
+  }
+
+  async execute(sql: string, signal?: AbortSignal): Promise<QueryResult> {
     await this.init()
     const start = performance.now()
+
+    // Check if already cancelled
+    if (signal?.aborted) {
+      throw new QueryCancelledError()
+    }
 
     try {
       const trimmed = sql.trim()
       const isSelect = /^\s*(SELECT|PRAGMA|EXPLAIN|WITH)\b/i.test(trimmed)
 
+      // For local SQLite, we simulate cancellation by checking periodically
+      // Note: sql.js doesn't support true async cancellation, so we check at key points
       if (isSelect) {
         let finalSql = trimmed
         const { page, pageSize } = options || {}
@@ -80,24 +108,20 @@ export class LocalExecutor implements DatabaseAdapter {
         const stmt = this.db.prepare(finalSql)
         const colNames: string[] = stmt.getColumnNames()
         const rawRows: any[][] = []
+        
         while (stmt.step()) {
+          // Check for cancellation every 100 rows
+          if (rawRows.length % 100 === 0 && signal?.aborted) {
+            stmt.free()
+            throw new QueryCancelledError()
+          }
           rawRows.push(stmt.get())
         }
         stmt.free()
 
-        // Get total count if paginated
-        let totalCount = rawRows.length
-        if (pageSize != null && page != null) {
-          try {
-            // Very simple way to get count, might not work for all queries but good for demo
-            const countSql = `SELECT COUNT(*) FROM (${trimmed})`
-            const countRes = this.db.exec(countSql)
-            if (countRes.length > 0 && countRes[0].values.length > 0) {
-              totalCount = countRes[0].values[0][0]
-            }
-          } catch (e) {
-            console.warn('Failed to get total count for pagination', e)
-          }
+        // Final cancellation check
+        if (signal?.aborted) {
+          throw new QueryCancelledError()
         }
 
         const elapsed = Math.round(performance.now() - start)
@@ -120,6 +144,11 @@ export class LocalExecutor implements DatabaseAdapter {
         }
       }
 
+      // For non-SELECT queries
+      if (signal?.aborted) {
+        throw new QueryCancelledError()
+      }
+
       this.db.exec(trimmed)
       const elapsed = Math.round(performance.now() - start)
 
@@ -131,6 +160,9 @@ export class LocalExecutor implements DatabaseAdapter {
         sql: trimmed,
       }
     } catch (e: any) {
+      if (e instanceof QueryCancelledError) {
+        throw e
+      }
       throw new Error(e.message || String(e))
     }
   }
@@ -175,6 +207,7 @@ export class LocalExecutor implements DatabaseAdapter {
   }
 
   destroy(): void {
+    this.cancel()
     if (this.db) {
       this.db.close()
       this.db = null
@@ -188,87 +221,37 @@ export class LocalExecutor implements DatabaseAdapter {
 // ---------------------------------------------------------------------------
 
 export class AdapterExecutor {
+  private currentAbortController: AbortController | null = null
+
   constructor(private adapter: DatabaseAdapter) {}
 
-  async execute(sql: string, options?: { page?: number; pageSize?: number }): Promise<QueryResult> {
-    const start = performance.now()
-    const result = await this.adapter.execute(sql, options)
-    result.elapsed = result.elapsed ?? Math.round(performance.now() - start)
-    result.sql = result.sql ?? sql
-    return result
-  }
-
-  async getSchema() {
-    return this.adapter.getSchema?.() ?? {}
-  }
-
-  destroy(): void {
-    this.adapter.destroy?.()
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Access Controlled Executor (wraps any adapter with guardrails)
-// ---------------------------------------------------------------------------
-
-/**
- * Wraps a DatabaseAdapter with access control validation.
- *
- * SECURITY NOTE:
- * - For remote adapters: Client-side validation is for UX only.
- *   Backend MUST enforce access control on /api/query endpoint.
- * - For local adapters: This IS the enforcement (no backend).
- *
- * @example
- * // Remote adapter with hints from backend
- * const adapter = createAccessControlledAdapter(remoteAdapter, {
- *   hints: { mode: 'read-only', isReadOnly: true },
- *   // config is NOT sent to client - backend has it
- * })
- */
-export class AccessControlledExecutor {
-  private config: AccessControlConfig
-
-  constructor(
-    private adapter: DatabaseAdapter,
-    options: {
-      /** Full config (for local enforcement). Backend should NOT send this to client. */
-      config?: AccessControlConfig
-      /** Hints only (for UI). Safe to send from backend. */
-      hints?: AccessControlHints
-    } = {},
-  ) {
-    // If hints provided, derive a minimal config for client-side validation
-    // Full config should come from options.config (backend only)
-    this.config = options.config ?? {
-      mode: options.hints?.mode ?? 'full',
-      // Derive blocked ops from hints (advisory only)
-      blockedOperations: options.hints?.disabledOperations,
-    }
-  }
-
   /**
-   * Get current access control hints for UI display.
+   * Cancel the currently running query
    */
-  async getAccessHints(): Promise<AccessControlHints | null> {
-    // Prefer adapter's own hints if available, else generate from config
-    const adapterHints = await this.adapter.getAccessHints?.()
-    if (adapterHints) return adapterHints
-    return generateAccessHints(this.config)
+  cancel(): void {
+    if (this.currentAbortController) {
+      this.currentAbortController.abort()
+      this.currentAbortController = null
+    }
+    // Also call adapter's cancel if available
+    this.adapter.cancel?.()
   }
 
-  async execute(sql: string, options?: { page?: number; pageSize?: number }): Promise<QueryResult> {
-    // Validate against config (enforcement for local, advisory for remote)
-    const validation = validateAccessControl(sql, this.config)
-    if (!validation.allowed) {
-      throw new Error(
-        `Access denied: ${validation.reason ?? 'Operation not permitted'} ` +
-        `[category: ${validation.category}, mode: ${validation.appliedMode}]`,
-      )
+  async execute(sql: string, signal?: AbortSignal): Promise<QueryResult> {
+    const start = performance.now()
+    
+    // Check if already cancelled
+    if (signal?.aborted) {
+      throw new QueryCancelledError()
     }
 
-    const start = performance.now()
-    const result = await this.adapter.execute(sql, options)
+    const result = await this.adapter.execute(sql, signal)
+    
+    // Check if cancelled during execution
+    if (signal?.aborted) {
+      throw new QueryCancelledError()
+    }
+    
     result.elapsed = result.elapsed ?? Math.round(performance.now() - start)
     result.sql = result.sql ?? sql
     return result
@@ -279,6 +262,7 @@ export class AccessControlledExecutor {
   }
 
   destroy(): void {
+    this.cancel()
     this.adapter.destroy?.()
   }
 }

@@ -2,10 +2,11 @@
 
 export { createSqlEditor } from './editor'
 export { validateSql } from './validator'
-export { LocalExecutor, configureSqlJsWasm, createAccessControlledAdapter, AccessControlledExecutor } from './executor'
+export { LocalExecutor, configureSqlJsWasm, QueryCancelledError } from './executor'
 export { createRemoteAdapter } from './remoteAdapter'
 export { buildTheme } from './theme'
 export { toCodeMirrorSchema, getTableNames, getAllColumns, getColumnsForTable } from './schema'
+export { exportToCSV, exportToJSON, exportToExcel, exportData, convertToCSV, convertToJSON, convertToExcel } from './export'
 
 // Access control exports
 export {
@@ -32,11 +33,12 @@ export type {
   ThemeTokenColors,
   SqlEditorConfig,
   SqlEditorInstance,
-  // Access control types
-  SqlOperationCategory,
-  AccessMode,
-  AccessControlConfig,
-  AccessControlHints,
-  AccessControlResult,
+  ExportOptions,
+  ExportResult,
+  ExportFormat,
+  ChartType,
+  ChartColumnConfig,
+  ChartColors,
+  ChartOptions,
 } from './types'
 export type { RemoteExecutorConfig } from './remoteAdapter'
